@@ -6,13 +6,15 @@ use indextree::{Arena, NodeId};
 use log::warn;
 use nom::error;
 use thiserror::Error;
-use tokenizer::{HtmlToken, Parser, TagToken};
+use tokenizer::{CommentToken, HtmlToken, Parser, TagToken};
 
 use crate::{
     vecpointer::VecPointerRef,
     xpath::{
         grammar::{
-            data_model::{AttributeNode, ElementNode, TextNode, XpathDocumentNode, XpathItem},
+            data_model::{
+                AttributeNode, CommentNode, ElementNode, TextNode, XpathDocumentNode, XpathItem,
+            },
             XpathItemTreeNode,
         },
         Xpath, XpathItemTree,
@@ -227,7 +229,9 @@ pub(crate) struct CreateAnElementForTheTokenResult {
 }
 
 pub struct HtmlParser {
+    error_handler: Box<dyn ParseErrorHandler>,
     insertion_mode: InsertionMode,
+    original_insertion_mode: Option<InsertionMode>,
     open_elements: Vec<NodeId>,
     context_element: Option<XpathItemTreeNode>,
     arena: Arena<XpathItemTreeNode>,
@@ -243,7 +247,9 @@ pub struct HtmlParser {
 impl HtmlParser {
     pub fn new() -> Self {
         HtmlParser {
+            error_handler: Box::new(DefaultParseErrorHandler),
             insertion_mode: InsertionMode::Initial,
+            original_insertion_mode: None,
             open_elements: Vec::new(),
             context_element: None,
             arena: Arena::new(),
@@ -258,6 +264,13 @@ impl HtmlParser {
     }
 
     pub fn parse(&mut self, text: &str) -> Result<XpathItemTree, HtmlParseError> {
+        // set document node as the root node
+        let document_node_id = self
+            .arena
+            .new_node(XpathItemTreeNode::DocumentNode(XpathDocumentNode::new()));
+
+        self.root_node = Some(document_node_id);
+
         let mut open_elements: Vec<XpathItemTreeNode> = Vec::new();
 
         let chars: Vec<char> = text.chars().collect();
@@ -265,20 +278,10 @@ impl HtmlParser {
         let mut tokenizer = tokenizer::Tokenizer::new(input_stream, Box::new(self));
         let mut tokenizer_error_handler = tokenizer::DefaultTokenizerErrorHandler;
 
-        let mut error_handler = DefaultParseErrorHandler;
-
         tokenizer.set_error_handler(Box::new(&tokenizer_error_handler));
 
         while !tokenizer.is_terminated() {
             tokenizer.step()?;
-        }
-
-        let document_node_id = self
-            .arena
-            .new_node(XpathItemTreeNode::DocumentNode(XpathDocumentNode::new()));
-
-        if let Some(root_node) = self.root_node {
-            document_node_id.append(root_node, &mut self.arena);
         }
 
         let arena = std::mem::replace(&mut self.arena, Arena::new());
@@ -429,6 +432,28 @@ impl HtmlParser {
         let adjusted_insertion_location = self.appropriate_place_for_inserting_a_node(None)?;
 
         adjusted_insertion_location.append(element_id, &mut self.arena);
+
+        Ok(())
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/parsing.html#insert-a-comment>
+    pub(crate) fn insert_a_comment(
+        &mut self,
+        comment: CommentToken,
+        parent: Option<NodeId>,
+    ) -> Result<(), HtmlParseError> {
+        let comment_node = XpathItemTreeNode::CommentNode(CommentNode {
+            content: comment.data,
+        });
+        let comment_id = self.new_node(comment_node);
+
+        let adjusted_insertion_location = if let Some(parent) = parent {
+            parent
+        } else {
+            self.appropriate_place_for_inserting_a_node(None)?
+        };
+
+        adjusted_insertion_location.append(comment_id, &mut self.arena);
 
         Ok(())
     }
@@ -702,9 +727,35 @@ pub enum HtmlParserError {
     FatalError(String),
 }
 
+struct Acknowledgement {
+    pub self_closed: bool,
+    pub tokenizer_state: Option<tokenizer::TokenizerState>,
+}
+
+impl Acknowledgement {
+    fn no() -> Self {
+        Acknowledgement {
+            self_closed: false,
+            tokenizer_state: None,
+        }
+    }
+
+    fn yes() -> Self {
+        Acknowledgement {
+            self_closed: true,
+            tokenizer_state: None,
+        }
+    }
+}
+
 impl Parser for HtmlParser {
-    fn token_emitted(&mut self, token: HtmlToken) -> Result<(), HtmlParseError> {
-        match self.insertion_mode {
+    fn token_emitted(&mut self, token: HtmlToken) -> Result<Acknowledgement, HtmlParseError> {
+        let self_closing = match &token {
+            HtmlToken::TagToken(tag) => tag.self_closing(),
+            _ => false,
+        };
+
+        let acknowledgement = match self.insertion_mode {
             InsertionMode::Initial => self.initial_insertion_mode(token),
             InsertionMode::BeforeHtml => self.before_html_insertion_mode(token),
             InsertionMode::BeforeHead => self.before_head_insertion_mode(token),
@@ -728,7 +779,14 @@ impl Parser for HtmlParser {
             InsertionMode::AfterFrameset => todo!(),
             InsertionMode::AfterAfterBody => self.after_after_body_insertion_mode(token),
             InsertionMode::AfterAfterFrameset => todo!(),
+        }?;
+
+        if self_closing && !acknowledgement.self_closed {
+            self.error_handler
+                .error_emitted(HtmlParseErrorType::NonVoidHtmlElementStartTagWithTrailingSolidus)?;
         }
+
+        Ok(acknowledgement)
     }
 
     /// <https://html.spec.whatwg.org/multipage/parsing.html#adjusted-current-node>

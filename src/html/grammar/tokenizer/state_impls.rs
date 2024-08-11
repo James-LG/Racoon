@@ -1,10 +1,10 @@
-use std::collections::HashMap;
+use std::{any, collections::HashMap};
 
 use nom::AsChar;
 use once_cell::sync::Lazy;
 
 use crate::{
-    html::grammar::{chars, HtmlParseError, HTML_NAMESPACE},
+    html::grammar::{chars, tokenizer, HtmlParseError, HTML_NAMESPACE},
     xpath::grammar::{data_model::AttributeNode, XpathItemTreeNode},
 };
 
@@ -88,6 +88,27 @@ impl<'a> Tokenizer<'a> {
                 }
             },
             None => self.emit(HtmlToken::EndOfFile)?,
+        };
+
+        Ok(())
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/parsing.html#script-data-state>
+    pub(super) fn script_data_state(&mut self) -> Result<(), HtmlParseError> {
+        match self.input_stream.next() {
+            Some('<') => {
+                self.state = TokenizerState::ScriptDataLessThanSign;
+            }
+            Some(&chars::NULL) => {
+                self.handle_error(TokenizerError::UnexpectedNullCharacter)?;
+
+                self.emit(HtmlToken::Character(chars::FEED_REPLACEMENT_CHARACTER))?;
+            }
+            None => self.emit(HtmlToken::EndOfFile)?,
+            Some(c) => {
+                let current_input_character = *c;
+                self.emit(HtmlToken::Character(current_input_character))?;
+            }
         };
 
         Ok(())
@@ -179,7 +200,7 @@ impl<'a> Tokenizer<'a> {
                 }
                 &'>' => {
                     self.state = TokenizerState::Data;
-                    self.emit_current_tag_token();
+                    self.emit_current_tag_token()?;
                 }
                 &chars::NULL => {
                     self.handle_error(TokenizerError::UnexpectedNullCharacter)?;
@@ -203,6 +224,541 @@ impl<'a> Tokenizer<'a> {
                 self.emit(HtmlToken::EndOfFile)?;
             }
         };
+
+        Ok(())
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/parsing.html#script-data-less-than-sign-state>
+    pub(super) fn script_data_less_than_sign_state(&mut self) -> Result<(), HtmlParseError> {
+        match self.input_stream.next() {
+            Some('/') => {
+                self.temporary_buffer.clear();
+                self.state = TokenizerState::ScriptDataEndTagOpen;
+            }
+            Some('!') => {
+                self.state = TokenizerState::ScriptDataEscapeStart;
+                self.emit(HtmlToken::Character('<'))?;
+                self.emit(HtmlToken::Character('!'))?;
+            }
+            _ => {
+                self.emit(HtmlToken::Character('<'))?;
+                self.reconsume_in_state(TokenizerState::ScriptData)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/parsing.html#script-data-end-tag-open-state>
+    pub(super) fn script_data_end_tag_open_state(&mut self) -> Result<(), HtmlParseError> {
+        match self.input_stream.next() {
+            Some(c) if c.is_ascii_alphabetic() => {
+                self.tag_token = Some(TagTokenType::EndTag(TagToken::new(String::new())));
+                self.reconsume_in_state(TokenizerState::ScriptDataEndTagName)?;
+            }
+            _ => {
+                self.emit(HtmlToken::Character('<'))?;
+                self.emit(HtmlToken::Character('/'))?;
+                self.reconsume_in_state(TokenizerState::ScriptData)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/parsing.html#script-data-end-tag-name-state>
+    pub(super) fn script_data_end_tag_name_state(&mut self) -> Result<(), HtmlParseError> {
+        fn anything_else(tokenizer: &mut Tokenizer) -> Result<(), HtmlParseError> {
+            tokenizer.emit(HtmlToken::Character('<'))?;
+            tokenizer.emit(HtmlToken::Character('/'))?;
+
+            let chars: Vec<char> = tokenizer.temporary_buffer.drain(..).collect();
+            for c in chars.into_iter() {
+                tokenizer.emit(HtmlToken::Character(c))?;
+            }
+
+            tokenizer.reconsume_in_state(TokenizerState::ScriptData)?;
+            Ok(())
+        }
+
+        match self.input_stream.next() {
+            Some(
+                &chars::CHARACTER_TABULATION
+                | &chars::LINE_FEED
+                | &chars::FORM_FEED
+                | &chars::SPACE,
+            ) => {
+                if self.is_current_end_tag_token_appropriate() {
+                    self.state = TokenizerState::BeforeAttributeName;
+                    return Ok(());
+                }
+
+                anything_else(self)?;
+            }
+            Some('/') => {
+                if self.is_current_end_tag_token_appropriate() {
+                    self.state = TokenizerState::SelfClosingStartTag;
+                    return Ok(());
+                }
+
+                anything_else(self)?;
+            }
+            Some('>') => {
+                if self.is_current_end_tag_token_appropriate() {
+                    self.state = TokenizerState::Data;
+                    self.emit_current_tag_token()?;
+                    return Ok(());
+                }
+
+                anything_else(self)?;
+            }
+            Some(c) if c.is_ascii_uppercase() => {
+                let c = *c;
+                let lowercase = c.to_ascii_lowercase();
+                self.current_tag_token_mut()?.tag_name_mut().push(lowercase);
+
+                self.temporary_buffer.push(c);
+            }
+            Some(c) if c.is_ascii_lowercase() => {
+                let c = *c;
+                self.current_tag_token_mut()?.tag_name_mut().push(c);
+
+                self.temporary_buffer.push(c);
+            }
+            _ => anything_else(self)?,
+        }
+
+        Ok(())
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/parsing.html#script-data-escape-start-state>
+    pub(super) fn script_data_escape_start_state(&mut self) -> Result<(), HtmlParseError> {
+        match self.input_stream.next() {
+            Some('-') => {
+                self.state = TokenizerState::ScriptDataEscapeStartDash;
+                self.emit(HtmlToken::Character('-'))?;
+            }
+            _ => {
+                self.reconsume_in_state(TokenizerState::ScriptData)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/parsing.html#script-data-escape-start-dash-state>
+    pub(super) fn script_data_escape_start_dash_state(&mut self) -> Result<(), HtmlParseError> {
+        match self.input_stream.next() {
+            Some('-') => {
+                self.state = TokenizerState::ScriptDataEscapedDashDash;
+                self.emit(HtmlToken::Character('-'))?;
+            }
+            _ => {
+                self.reconsume_in_state(TokenizerState::ScriptData)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/parsing.html#script-data-escaped-state>
+    pub(super) fn script_data_escaped_state(&mut self) -> Result<(), HtmlParseError> {
+        match self.input_stream.next() {
+            Some('-') => {
+                self.state = TokenizerState::ScriptDataEscapedDash;
+                self.emit(HtmlToken::Character('-'))?;
+            }
+            Some('<') => {
+                self.state = TokenizerState::ScriptDataEscapedLessThanSign;
+            }
+            Some(&chars::NULL) => {
+                self.handle_error(TokenizerError::UnexpectedNullCharacter)?;
+
+                self.emit(HtmlToken::Character(chars::FEED_REPLACEMENT_CHARACTER))?;
+            }
+            None => {
+                self.handle_error(TokenizerError::EofInScriptHtmlCommentLikeText)?;
+
+                self.emit(HtmlToken::EndOfFile)?;
+            }
+            Some(c) => {
+                let c = *c;
+                self.emit(HtmlToken::Character(c))?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/parsing.html#script-data-escaped-dash-state>
+    pub(super) fn script_data_escaped_dash_state(&mut self) -> Result<(), HtmlParseError> {
+        match self.input_stream.next() {
+            Some('-') => {
+                self.state = TokenizerState::ScriptDataEscapedDashDash;
+                self.emit(HtmlToken::Character('-'))?;
+            }
+            Some('<') => {
+                self.state = TokenizerState::ScriptDataEscapedLessThanSign;
+            }
+            Some(&chars::NULL) => {
+                self.handle_error(TokenizerError::UnexpectedNullCharacter)?;
+
+                self.state = TokenizerState::ScriptDataEscaped;
+                self.emit(HtmlToken::Character(chars::FEED_REPLACEMENT_CHARACTER))?;
+            }
+            None => {
+                self.handle_error(TokenizerError::EofInScriptHtmlCommentLikeText)?;
+
+                self.emit(HtmlToken::EndOfFile)?;
+            }
+            Some(c) => {
+                let c = *c;
+                self.state = TokenizerState::ScriptDataEscaped;
+                self.emit(HtmlToken::Character(c))?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/parsing.html#script-data-escaped-dash-dash-state>
+    pub(super) fn script_data_escaped_dash_dash_state(&mut self) -> Result<(), HtmlParseError> {
+        match self.input_stream.next() {
+            Some('-') => {
+                self.emit(HtmlToken::Character('-'))?;
+            }
+            Some('<') => {
+                self.state = TokenizerState::ScriptDataEscapedLessThanSign;
+            }
+            Some('>') => {
+                self.state = TokenizerState::ScriptData;
+                self.emit(HtmlToken::Character('>'))?;
+            }
+            Some(&chars::NULL) => {
+                self.handle_error(TokenizerError::UnexpectedNullCharacter)?;
+
+                self.state = TokenizerState::ScriptDataEscaped;
+                self.emit(HtmlToken::Character(chars::FEED_REPLACEMENT_CHARACTER))?;
+            }
+            None => {
+                self.handle_error(TokenizerError::EofInScriptHtmlCommentLikeText)?;
+
+                self.emit(HtmlToken::EndOfFile)?;
+            }
+            Some(c) => {
+                let c = *c;
+                self.state = TokenizerState::ScriptDataEscaped;
+                self.emit(HtmlToken::Character(c))?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/parsing.html#script-data-escaped-less-than-sign-state>
+    pub(super) fn script_data_escaped_less_than_sign_state(
+        &mut self,
+    ) -> Result<(), HtmlParseError> {
+        match self.input_stream.next() {
+            Some('/') => {
+                self.temporary_buffer.clear();
+                self.state = TokenizerState::ScriptDataEscapedEndTagOpen;
+                self.emit(HtmlToken::Character('/'))?;
+            }
+            Some(c) if c.is_ascii_alphabetic() => {
+                self.temporary_buffer.clear();
+                self.emit(HtmlToken::Character('<'))?;
+                self.reconsume_in_state(TokenizerState::ScriptDataDoubleEscapeStart)?;
+            }
+            _ => {
+                self.emit(HtmlToken::Character('<'))?;
+                self.reconsume_in_state(TokenizerState::ScriptDataEscaped)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/parsing.html#script-data-escaped-end-tag-open-state>
+    pub(super) fn script_data_escaped_end_tag_open_state(&mut self) -> Result<(), HtmlParseError> {
+        match self.input_stream.next() {
+            Some(c) if c.is_ascii_alphabetic() => {
+                self.tag_token = Some(TagTokenType::EndTag(TagToken::new(String::new())));
+                self.reconsume_in_state(TokenizerState::ScriptDataEscapedEndTagName)?;
+            }
+            _ => {
+                self.emit(HtmlToken::Character('<'))?;
+                self.emit(HtmlToken::Character('/'))?;
+                self.reconsume_in_state(TokenizerState::ScriptDataEscaped)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/parsing.html#script-data-escaped-end-tag-name-state>
+    pub(super) fn script_data_escaped_end_tag_name_state(&mut self) -> Result<(), HtmlParseError> {
+        fn anything_else(tokenizer: &mut Tokenizer) -> Result<(), HtmlParseError> {
+            tokenizer.emit(HtmlToken::Character('<'))?;
+            tokenizer.emit(HtmlToken::Character('/'))?;
+
+            let chars: Vec<char> = tokenizer.temporary_buffer.drain(..).collect();
+            for c in chars.into_iter() {
+                tokenizer.emit(HtmlToken::Character(c))?;
+            }
+
+            tokenizer.reconsume_in_state(TokenizerState::ScriptDataEscaped)?;
+            Ok(())
+        }
+
+        match self.input_stream.next() {
+            Some(
+                &chars::CHARACTER_TABULATION
+                | &chars::LINE_FEED
+                | &chars::FORM_FEED
+                | &chars::SPACE,
+            ) => {
+                if self.is_current_end_tag_token_appropriate() {
+                    self.state = TokenizerState::BeforeAttributeName;
+                    return Ok(());
+                }
+
+                anything_else(self)?;
+            }
+            Some('/') => {
+                if self.is_current_end_tag_token_appropriate() {
+                    self.state = TokenizerState::SelfClosingStartTag;
+                    return Ok(());
+                }
+
+                anything_else(self)?;
+            }
+            Some('>') => {
+                if self.is_current_end_tag_token_appropriate() {
+                    self.state = TokenizerState::Data;
+                    self.emit_current_tag_token()?;
+                    return Ok(());
+                }
+
+                anything_else(self)?;
+            }
+            Some(c) if c.is_ascii_uppercase() => {
+                let c = *c;
+                let lowercase = c.to_ascii_lowercase();
+                self.current_tag_token_mut()?.tag_name_mut().push(lowercase);
+
+                self.temporary_buffer.push(c);
+            }
+            Some(c) if c.is_ascii_lowercase() => {
+                let c = *c;
+                self.current_tag_token_mut()?.tag_name_mut().push(c);
+
+                self.temporary_buffer.push(c);
+            }
+            _ => anything_else(self)?,
+        }
+
+        Ok(())
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/parsing.html#script-data-double-escape-start-state>
+    pub(super) fn script_data_double_escape_start_state(&mut self) -> Result<(), HtmlParseError> {
+        match self.input_stream.next() {
+            Some(c)
+                if [
+                    chars::CHARACTER_TABULATION,
+                    chars::LINE_FEED,
+                    chars::FORM_FEED,
+                    chars::SPACE,
+                    '/',
+                    '>',
+                ]
+                .contains(c) =>
+            {
+                let c = *c;
+                let buffer = self.temporary_buffer.iter().collect::<String>();
+                if buffer == "script" {
+                    self.state = TokenizerState::ScriptDataDoubleEscaped;
+                } else {
+                    self.state = TokenizerState::ScriptDataEscaped;
+                }
+
+                self.emit(HtmlToken::Character(c))?;
+            }
+            Some(c) if c.is_ascii_uppercase() => {
+                let c = *c;
+                let lowercase = c.to_ascii_lowercase();
+                self.temporary_buffer.push(lowercase);
+
+                self.emit(HtmlToken::Character(c))?;
+            }
+            Some(c) if c.is_ascii_lowercase() => {
+                let c = *c;
+                self.temporary_buffer.push(c);
+
+                self.emit(HtmlToken::Character(c))?;
+            }
+            _ => {
+                self.reconsume_in_state(TokenizerState::ScriptDataEscaped)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/parsing.html#script-data-double-escaped-state>
+    pub(super) fn script_data_double_escaped_state(&mut self) -> Result<(), HtmlParseError> {
+        match self.input_stream.next() {
+            Some('-') => {
+                self.state = TokenizerState::ScriptDataDoubleEscapedDash;
+                self.emit(HtmlToken::Character('-'))?;
+            }
+            Some('<') => {
+                self.state = TokenizerState::ScriptDataDoubleEscapedLessThanSign;
+            }
+            Some(&chars::NULL) => {
+                self.handle_error(TokenizerError::UnexpectedNullCharacter)?;
+
+                self.emit(HtmlToken::Character(chars::FEED_REPLACEMENT_CHARACTER))?;
+            }
+            None => {
+                self.handle_error(TokenizerError::EofInScriptHtmlCommentLikeText)?;
+
+                self.emit(HtmlToken::EndOfFile)?;
+            }
+            Some(c) => {
+                let c = *c;
+                self.emit(HtmlToken::Character(c))?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/parsing.html#script-data-double-escaped-dash-state>
+    pub(super) fn script_data_double_escaped_dash_state(&mut self) -> Result<(), HtmlParseError> {
+        match self.input_stream.next() {
+            Some('-') => {
+                self.state = TokenizerState::ScriptDataDoubleEscapedDashDash;
+                self.emit(HtmlToken::Character('-'))?;
+            }
+            Some('<') => {
+                self.state = TokenizerState::ScriptDataDoubleEscapedLessThanSign;
+            }
+            Some(&chars::NULL) => {
+                self.handle_error(TokenizerError::UnexpectedNullCharacter)?;
+                self.state = TokenizerState::ScriptDataDoubleEscaped;
+                self.emit(HtmlToken::Character(chars::FEED_REPLACEMENT_CHARACTER))?;
+            }
+            None => {
+                self.handle_error(TokenizerError::EofInScriptHtmlCommentLikeText)?;
+
+                self.emit(HtmlToken::EndOfFile)?;
+            }
+            Some(c) => {
+                self.state = TokenizerState::ScriptDataDoubleEscaped;
+                let c = *c;
+                self.emit(HtmlToken::Character(c))?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/parsing.html#script-data-double-escaped-dash-dash-state>
+    pub(super) fn script_data_double_escaped_dash_dash_state(
+        &mut self,
+    ) -> Result<(), HtmlParseError> {
+        match self.input_stream.next() {
+            Some('-') => {
+                self.emit(HtmlToken::Character('-'))?;
+            }
+            Some('<') => {
+                self.state = TokenizerState::ScriptDataDoubleEscapedLessThanSign;
+            }
+            Some('>') => {
+                self.state = TokenizerState::ScriptData;
+                self.emit(HtmlToken::Character('>'))?;
+            }
+            Some(&chars::NULL) => {
+                self.handle_error(TokenizerError::UnexpectedNullCharacter)?;
+                self.state = TokenizerState::ScriptDataDoubleEscaped;
+                self.emit(HtmlToken::Character(chars::FEED_REPLACEMENT_CHARACTER))?;
+            }
+            None => {
+                self.handle_error(TokenizerError::EofInScriptHtmlCommentLikeText)?;
+
+                self.emit(HtmlToken::EndOfFile)?;
+            }
+            Some(c) => {
+                self.state = TokenizerState::ScriptDataDoubleEscaped;
+                let c = *c;
+                self.emit(HtmlToken::Character(c))?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/parsing.html#script-data-double-escaped-less-than-sign-state>
+    pub(super) fn script_data_double_escaped_less_than_sign_state(
+        &mut self,
+    ) -> Result<(), HtmlParseError> {
+        match self.input_stream.next() {
+            Some('/') => {
+                self.temporary_buffer.clear();
+                self.state = TokenizerState::ScriptDataDoubleEscapeEnd;
+                self.emit(HtmlToken::Character('/'))?;
+            }
+            _ => {
+                self.reconsume_in_state(TokenizerState::ScriptDataDoubleEscaped)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/parsing.html#script-data-double-escape-end-state>
+    pub(super) fn script_data_double_escape_end_state(&mut self) -> Result<(), HtmlParseError> {
+        match self.input_stream.next() {
+            Some(c)
+                if [
+                    chars::CHARACTER_TABULATION,
+                    chars::LINE_FEED,
+                    chars::FORM_FEED,
+                    chars::SPACE,
+                    '/',
+                    '>',
+                ]
+                .contains(c) =>
+            {
+                let c = *c;
+                let buffer = self.temporary_buffer.iter().collect::<String>();
+                if buffer == "script" {
+                    self.state = TokenizerState::ScriptDataEscaped;
+                } else {
+                    self.state = TokenizerState::ScriptDataDoubleEscaped;
+                }
+
+                self.emit(HtmlToken::Character(c))?;
+            }
+            Some(c) if c.is_ascii_uppercase() => {
+                let c = *c;
+                let lowercase = c.to_ascii_lowercase();
+                self.temporary_buffer.push(lowercase);
+
+                self.emit(HtmlToken::Character(c))?;
+            }
+            Some(c) if c.is_ascii_lowercase() => {
+                let c = *c;
+                self.temporary_buffer.push(c);
+
+                self.emit(HtmlToken::Character(c))?;
+            }
+            _ => {
+                self.reconsume_in_state(TokenizerState::ScriptDataDoubleEscaped)?;
+            }
+        }
 
         Ok(())
     }
@@ -305,7 +861,7 @@ impl<'a> Tokenizer<'a> {
             }
             Some('>') => {
                 self.state = TokenizerState::Data;
-                self.emit_current_tag_token();
+                self.emit_current_tag_token()?;
             }
             None => {
                 self.handle_error(TokenizerError::EofInTag)?;
@@ -343,7 +899,7 @@ impl<'a> Tokenizer<'a> {
                 self.handle_error(TokenizerError::MissingAttributeValue)?;
 
                 self.state = TokenizerState::Data;
-                self.emit_current_tag_token();
+                self.emit_current_tag_token()?;
             }
             Some(_) | None => {
                 self.reconsume_in_state(TokenizerState::AttributeValueUnquoted)?;
@@ -428,7 +984,7 @@ impl<'a> Tokenizer<'a> {
             }
             Some('>') => {
                 self.state = TokenizerState::Data;
-                self.emit_current_tag_token();
+                self.emit_current_tag_token()?;
             }
             Some(&chars::NULL) => {
                 self.handle_error(TokenizerError::UnexpectedNullCharacter)?;
@@ -471,7 +1027,7 @@ impl<'a> Tokenizer<'a> {
             }
             Some('>') => {
                 self.state = TokenizerState::Data;
-                self.emit_current_tag_token();
+                self.emit_current_tag_token()?;
             }
             None => {
                 self.handle_error(TokenizerError::EofInTag)?;
@@ -494,7 +1050,7 @@ impl<'a> Tokenizer<'a> {
             Some('>') => {
                 *self.current_tag_token_mut()?.self_closing_mut() = true;
                 self.state = TokenizerState::Data;
-                self.emit_current_tag_token();
+                self.emit_current_tag_token()?;
             }
             None => {
                 self.handle_error(TokenizerError::EofInTag)?;
@@ -505,6 +1061,33 @@ impl<'a> Tokenizer<'a> {
                 self.handle_error(TokenizerError::UnexpectedSolidusInTag)?;
 
                 self.reconsume_in_state(TokenizerState::BeforeAttributeName)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/parsing.html#bogus-comment-state>
+    pub(super) fn bogus_comment_state(&mut self) -> Result<(), HtmlParseError> {
+        match self.input_stream.next() {
+            Some('>') => {
+                self.state = TokenizerState::Data;
+                self.emit_current_comment_token()?;
+            }
+            None => {
+                self.emit_current_comment_token()?;
+                self.emit(HtmlToken::EndOfFile)?;
+            }
+            Some(&chars::NULL) => {
+                self.handle_error(TokenizerError::UnexpectedNullCharacter)?;
+
+                self.current_comment_token_mut()?
+                    .data
+                    .push(chars::FEED_REPLACEMENT_CHARACTER);
+            }
+            Some(c) => {
+                let c = *c;
+                self.current_comment_token_mut()?.data.push(c);
             }
         }
 
@@ -571,6 +1154,233 @@ impl<'a> Tokenizer<'a> {
         Ok(())
     }
 
+    /// <https://html.spec.whatwg.org/multipage/parsing.html#comment-start-state>
+    pub(super) fn comment_start_state(&mut self) -> Result<(), HtmlParseError> {
+        match self.input_stream.next() {
+            Some('-') => {
+                self.state = TokenizerState::CommentStartDash;
+            }
+            Some('>') => {
+                self.handle_error(TokenizerError::AbruptClosingOfEmptyComment)?;
+
+                self.state = TokenizerState::Data;
+                self.emit_current_comment_token()?;
+            }
+            _ => {
+                self.reconsume_in_state(TokenizerState::BogusComment)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/parsing.html#comment-start-dash-state>
+    pub(super) fn comment_start_dash_state(&mut self) -> Result<(), HtmlParseError> {
+        match self.input_stream.next() {
+            Some('-') => {
+                self.state = TokenizerState::CommentEnd;
+            }
+            Some('>') => {
+                self.handle_error(TokenizerError::AbruptClosingOfEmptyComment)?;
+
+                self.state = TokenizerState::Data;
+                self.emit_current_comment_token()?;
+            }
+            None => {
+                self.handle_error(TokenizerError::EofInComment)?;
+
+                self.emit_current_comment_token()?;
+                self.emit(HtmlToken::EndOfFile)?;
+            }
+            _ => {
+                self.current_comment_token_mut()?.data.push_str("-");
+
+                self.reconsume_in_state(TokenizerState::Comment)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/parsing.html#comment-state>
+    pub(super) fn comment_state(&mut self) -> Result<(), HtmlParseError> {
+        match self.input_stream.next() {
+            Some('<') => {
+                self.current_comment_token_mut()?.data.push_str("<");
+                self.state = TokenizerState::CommentLessThanSign;
+            }
+            Some('-') => {
+                self.state = TokenizerState::CommentEndDash;
+            }
+            Some(&chars::NULL) => {
+                self.handle_error(TokenizerError::UnexpectedNullCharacter)?;
+
+                self.current_comment_token_mut()?
+                    .data
+                    .push(chars::FEED_REPLACEMENT_CHARACTER);
+            }
+            None => {
+                self.handle_error(TokenizerError::EofInComment)?;
+
+                self.emit_current_comment_token()?;
+                self.emit(HtmlToken::EndOfFile)?;
+            }
+            Some(c) => {
+                let c = *c;
+                self.current_comment_token_mut()?.data.push(c);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/parsing.html#comment-less-than-sign-state>
+    pub(super) fn comment_less_than_sign_state(&mut self) -> Result<(), HtmlParseError> {
+        match self.input_stream.next() {
+            Some('!') => {
+                self.current_comment_token_mut()?.data.push_str("!");
+                self.state = TokenizerState::CommentLessThanSignBang;
+            }
+            Some('<') => {
+                self.current_comment_token_mut()?.data.push_str("<");
+            }
+            _ => {
+                self.reconsume_in_state(TokenizerState::Comment)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/parsing.html#comment-less-than-sign-bang-state>
+    pub(super) fn comment_less_than_sign_bang_state(&mut self) -> Result<(), HtmlParseError> {
+        match self.input_stream.next() {
+            Some('-') => {
+                self.state = TokenizerState::CommentLessThanSignBangDash;
+            }
+            _ => {
+                self.reconsume_in_state(TokenizerState::Comment)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/parsing.html#comment-less-than-sign-bang-dash-state>
+    pub(super) fn comment_less_than_sign_bang_dash_state(&mut self) -> Result<(), HtmlParseError> {
+        match self.input_stream.next() {
+            Some('-') => {
+                self.state = TokenizerState::CommentLessThanSignBangDashDash;
+            }
+            _ => {
+                self.reconsume_in_state(TokenizerState::CommentEndDash)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/parsing.html#comment-less-than-sign-bang-dash-dash-state>
+    pub(super) fn comment_less_than_sign_bang_dash_dash_state(
+        &mut self,
+    ) -> Result<(), HtmlParseError> {
+        match self.input_stream.next() {
+            Some('>') => {
+                self.reconsume_in_state(TokenizerState::CommentEnd)?;
+            }
+            None => {
+                self.reconsume_in_state(TokenizerState::CommentEnd)?;
+            }
+            _ => {
+                self.handle_error(TokenizerError::NestedComment)?;
+
+                self.reconsume_in_state(TokenizerState::CommentEnd)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/parsing.html#comment-end-dash-state>
+    pub(super) fn comment_end_dash_state(&mut self) -> Result<(), HtmlParseError> {
+        match self.input_stream.next() {
+            Some('-') => {
+                self.state = TokenizerState::CommentEnd;
+            }
+            None => {
+                self.handle_error(TokenizerError::EofInComment)?;
+
+                self.emit_current_comment_token()?;
+                self.emit(HtmlToken::EndOfFile)?;
+            }
+            _ => {
+                self.current_comment_token_mut()?.data.push_str("-");
+
+                self.reconsume_in_state(TokenizerState::Comment)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/parsing.html#comment-end-state>
+    pub(super) fn comment_end_state(&mut self) -> Result<(), HtmlParseError> {
+        match self.input_stream.next() {
+            Some('>') => {
+                self.state = TokenizerState::Data;
+                self.emit_current_comment_token()?;
+            }
+            Some('!') => {
+                self.state = TokenizerState::CommentEndBang;
+            }
+            Some('-') => {
+                self.current_comment_token_mut()?.data.push_str("-");
+            }
+            None => {
+                self.handle_error(TokenizerError::EofInComment)?;
+
+                self.emit_current_comment_token()?;
+                self.emit(HtmlToken::EndOfFile)?;
+            }
+            _ => {
+                self.current_comment_token_mut()?.data.push_str("--");
+
+                self.reconsume_in_state(TokenizerState::Comment)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/parsing.html#comment-end-bang-state>
+    pub(super) fn comment_end_bang_state(&mut self) -> Result<(), HtmlParseError> {
+        match self.input_stream.next() {
+            Some('-') => {
+                self.current_comment_token_mut()?.data.push_str("--!");
+                self.state = TokenizerState::CommentEndDash;
+            }
+            Some('>') => {
+                self.handle_error(TokenizerError::IncorrectlyClosedComment)?;
+
+                self.state = TokenizerState::Data;
+                self.emit_current_comment_token()?;
+            }
+            None => {
+                self.handle_error(TokenizerError::EofInComment)?;
+
+                self.emit_current_comment_token()?;
+                self.emit(HtmlToken::EndOfFile)?;
+            }
+            _ => {
+                self.current_comment_token_mut()?.data.push_str("--!");
+
+                self.reconsume_in_state(TokenizerState::Comment)?;
+            }
+        }
+
+        Ok(())
+    }
+
     /// <https://html.spec.whatwg.org/multipage/parsing.html#doctype-state>
     pub(super) fn doctype_state(&mut self) -> Result<(), HtmlParseError> {
         match self.input_stream.next() {
@@ -589,7 +1399,7 @@ impl<'a> Tokenizer<'a> {
                 let mut doctype_token = DoctypeToken::new(String::new());
                 doctype_token.force_quirks = true;
                 self.doctype_token = Some(doctype_token);
-                self.emit_current_token();
+                self.emit_current_token()?;
                 self.emit(HtmlToken::EndOfFile)?;
             }
             Some(_) => {
@@ -630,7 +1440,7 @@ impl<'a> Tokenizer<'a> {
                 doctype_token.force_quirks = true;
                 self.doctype_token = Some(doctype_token);
 
-                self.emit_current_token();
+                self.emit_current_token()?;
                 self.state = TokenizerState::Data;
             }
             None => {
@@ -640,7 +1450,7 @@ impl<'a> Tokenizer<'a> {
                 doctype_token.force_quirks = true;
                 self.doctype_token = Some(doctype_token);
 
-                self.emit_current_token();
+                self.emit_current_token()?;
                 self.emit(HtmlToken::EndOfFile)?;
             }
             Some(c) => {
@@ -683,7 +1493,7 @@ impl<'a> Tokenizer<'a> {
 
                 self.current_doctype_token_mut()?.force_quirks = true;
 
-                self.emit_current_doctype_token();
+                self.emit_current_doctype_token()?;
                 self.emit(HtmlToken::EndOfFile)?;
             }
             Some(c) => {
@@ -713,7 +1523,7 @@ impl<'a> Tokenizer<'a> {
 
                 self.current_doctype_token_mut()?.force_quirks = true;
 
-                self.emit_current_doctype_token();
+                self.emit_current_doctype_token()?;
                 self.emit(HtmlToken::EndOfFile)?;
             }
             Some(_) => {

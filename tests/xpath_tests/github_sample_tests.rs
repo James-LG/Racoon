@@ -3,7 +3,7 @@ use skyscraper::xpath::grammar::data_model::TextNode;
 use skyscraper::xpath::grammar::XpathItemTreeNode;
 use skyscraper::{html, xpath};
 
-static HTML: &'static str = include_str!("samples/James-LG_Skyscraper.html");
+static HTML: &'static str = include_str!("../samples/James-LG_Skyscraper.html");
 
 #[test]
 fn xpath_github_sample1() {

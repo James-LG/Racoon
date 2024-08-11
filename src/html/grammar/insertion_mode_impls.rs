@@ -1,5 +1,5 @@
 use crate::{
-    html::grammar::SPECIAL_ELEMENTS,
+    html::grammar::{tokenizer::TokenizerState, SPECIAL_ELEMENTS},
     xpath::grammar::{
         data_model::{AttributeNode, ElementNode},
         XpathItemTreeNode,
@@ -9,7 +9,7 @@ use crate::{
 use super::{
     chars,
     tokenizer::{HtmlToken, Parser, TagToken, TagTokenType},
-    HtmlParseError, HtmlParser, HtmlParserError, InsertionMode, HTML_NAMESPACE,
+    Acknowledgement, HtmlParseError, HtmlParser, HtmlParserError, InsertionMode, HTML_NAMESPACE,
 };
 
 impl HtmlParser {
@@ -17,7 +17,7 @@ impl HtmlParser {
     pub(super) fn initial_insertion_mode(
         &mut self,
         token: HtmlToken,
-    ) -> Result<(), HtmlParseError> {
+    ) -> Result<Acknowledgement, HtmlParseError> {
         match token {
             HtmlToken::Character(
                 chars::CHARACTER_TABULATION
@@ -42,20 +42,23 @@ impl HtmlParser {
             }
         }
 
-        Ok(())
+        Ok(Acknowledgement::no())
     }
 
     /// <https://html.spec.whatwg.org/multipage/parsing.html#the-before-html-insertion-mode>
     pub(super) fn before_html_insertion_mode(
         &mut self,
         token: HtmlToken,
-    ) -> Result<(), HtmlParseError> {
+    ) -> Result<Acknowledgement, HtmlParseError> {
         fn anything_else(parser: &mut HtmlParser, token: HtmlToken) -> Result<(), HtmlParseError> {
             let result = parser.create_element(String::from("html"), HTML_NAMESPACE, None, None)?;
 
             // append the node to the document
             let node_id = parser.new_node(XpathItemTreeNode::ElementNode(result));
-            parser.root_node = Some(node_id);
+            parser
+                .root_node
+                .expect("root node is None")
+                .append(node_id, &mut parser.arena);
 
             parser.open_elements.push(node_id);
 
@@ -67,7 +70,13 @@ impl HtmlParser {
 
         match token {
             HtmlToken::DocType(_) => todo!(),
-            HtmlToken::Comment(_) => todo!(),
+            HtmlToken::Comment(token) => {
+                let parent = self
+                    .root_node
+                    .ok_or(HtmlParseError::new("root node is None"))?;
+
+                self.insert_a_comment(token, Some(parent))?;
+            }
             HtmlToken::Character(
                 chars::CHARACTER_TABULATION
                 | chars::LINE_FEED
@@ -83,8 +92,10 @@ impl HtmlParser {
                 // insert the result
                 let node_id = self.insert_create_an_element_for_the_token_result(result)?;
 
-                // set it as the root node
-                self.root_node = Some(node_id);
+                // append it to the document
+                self.root_node
+                    .expect("root node is None")
+                    .append(node_id, &mut self.arena);
 
                 self.insertion_mode = InsertionMode::BeforeHead;
             }
@@ -104,14 +115,14 @@ impl HtmlParser {
             }
         }
 
-        Ok(())
+        Ok(Acknowledgement::no())
     }
 
     /// <https://html.spec.whatwg.org/multipage/parsing.html#the-before-head-insertion-mode>
     pub(super) fn before_head_insertion_mode(
         &mut self,
         token: HtmlToken,
-    ) -> Result<(), HtmlParseError> {
+    ) -> Result<Acknowledgement, HtmlParseError> {
         fn anything_else(parser: &mut HtmlParser, token: HtmlToken) -> Result<(), HtmlParseError> {
             let node_id = parser.insert_an_html_element(TagToken::new(String::from("head")))?;
 
@@ -139,7 +150,11 @@ impl HtmlParser {
                 todo!()
             }
             HtmlToken::TagToken(TagTokenType::StartTag(token)) if token.tag_name == "head" => {
-                todo!()
+                let node_id = self.insert_an_html_element(token)?;
+
+                self.head_element_pointer = Some(node_id);
+
+                self.insertion_mode = InsertionMode::InHead;
             }
             HtmlToken::TagToken(TagTokenType::EndTag(token))
                 if ["head", "body", "html", "br"].contains(&token.tag_name.as_ref()) =>
@@ -152,14 +167,14 @@ impl HtmlParser {
             _ => anything_else(self, token)?,
         }
 
-        Ok(())
+        Ok(Acknowledgement::no())
     }
 
     /// <https://html.spec.whatwg.org/multipage/parsing.html#parsing-main-inhead>
     pub(super) fn in_head_insertion_mode(
         &mut self,
         token: HtmlToken,
-    ) -> Result<(), HtmlParseError> {
+    ) -> Result<Acknowledgement, HtmlParseError> {
         fn anything_else(parser: &mut HtmlParser, token: HtmlToken) -> Result<(), HtmlParseError> {
             parser.open_elements.pop().expect("open elements is empty");
 
@@ -170,14 +185,17 @@ impl HtmlParser {
             Ok(())
         }
         match token {
-            HtmlToken::Character(
-                chars::CHARACTER_TABULATION
-                | chars::LINE_FEED
-                | chars::FORM_FEED
-                | chars::CARRIAGE_RETURN
-                | chars::SPACE,
-            ) => {
-                todo!()
+            HtmlToken::Character(c)
+                if [
+                    chars::CHARACTER_TABULATION,
+                    chars::LINE_FEED,
+                    chars::FORM_FEED,
+                    chars::CARRIAGE_RETURN,
+                    chars::SPACE,
+                ]
+                .contains(&c) =>
+            {
+                self.insert_character(vec![c])?;
             }
             HtmlToken::Comment(_) => todo!(),
             HtmlToken::DocType(_) => todo!(),
@@ -187,10 +205,22 @@ impl HtmlParser {
             HtmlToken::TagToken(TagTokenType::StartTag(token))
                 if ["base", "basefont", "bgsound", "link"].contains(&token.tag_name.as_str()) =>
             {
-                todo!()
+                self.insert_an_html_element(token)?;
+
+                self.open_elements.pop().expect("open elements is empty");
+
+                // acknowledge the self closing tag
+                return Ok(Acknowledgement::yes());
             }
             HtmlToken::TagToken(TagTokenType::StartTag(token)) if token.tag_name == "meta" => {
-                todo!()
+                self.insert_an_html_element(token)?;
+
+                self.open_elements.pop().expect("open elements is empty");
+
+                // TODO: some encoding stuff
+
+                // acknowledge the self closing tag
+                return Ok(Acknowledgement::yes());
             }
             HtmlToken::TagToken(TagTokenType::StartTag(token)) if token.tag_name == "title" => {
                 todo!()
@@ -204,7 +234,20 @@ impl HtmlParser {
                 todo!()
             }
             HtmlToken::TagToken(TagTokenType::StartTag(token)) if token.tag_name == "script" => {
-                todo!()
+                let node = self.insert_an_html_element(token)?;
+
+                // TODO: lots of script and template stuff
+
+                self.open_elements.push(node);
+
+                self.original_insertion_mode = Some(self.insertion_mode);
+                self.insertion_mode = InsertionMode::Text;
+
+                // set tokenizer state to script data state
+                return Ok(Acknowledgement {
+                    self_closed: false,
+                    tokenizer_state: Some(TokenizerState::ScriptData),
+                });
             }
             HtmlToken::TagToken(TagTokenType::EndTag(token)) if token.tag_name == "head" => {
                 todo!()
@@ -231,14 +274,14 @@ impl HtmlParser {
             }
         }
 
-        Ok(())
+        Ok(Acknowledgement::no())
     }
 
     /// <https://html.spec.whatwg.org/multipage/parsing.html#the-after-head-insertion-mode>
     pub(super) fn after_head_insertion_mode(
         &mut self,
         token: HtmlToken,
-    ) -> Result<(), HtmlParseError> {
+    ) -> Result<Acknowledgement, HtmlParseError> {
         fn anything_else(parser: &mut HtmlParser, token: HtmlToken) -> Result<(), HtmlParseError> {
             parser.insert_an_html_element(TagToken::new(String::from("body")))?;
 
@@ -301,14 +344,14 @@ impl HtmlParser {
             }
         }
 
-        Ok(())
+        Ok(Acknowledgement::no())
     }
 
     /// <https://html.spec.whatwg.org/multipage/parsing.html#parsing-main-inbody>
     pub(super) fn in_body_insertion_mode(
         &mut self,
         token: HtmlToken,
-    ) -> Result<(), HtmlParseError> {
+    ) -> Result<Acknowledgement, HtmlParseError> {
         fn ensure_open_elements_has_valid_element(
             parser: &HtmlParser,
         ) -> Result<(), HtmlParseError> {
@@ -376,7 +419,7 @@ impl HtmlParser {
                     .collect();
 
                 if elements.iter().any(|node| node.name == "template") {
-                    return Ok(());
+                    return Ok(Acknowledgement::no());
                 }
 
                 // for each attribute, check if the attribute is already present on top element of the stack
@@ -388,7 +431,7 @@ impl HtmlParser {
                         self.handle_error(HtmlParserError::MinorError(String::from(
                             "top element is not an element node",
                         )))?;
-                        return Ok(());
+                        return Ok(Acknowledgement::no());
                     }
                 };
 
@@ -729,14 +772,14 @@ impl HtmlParser {
             }
         }
 
-        Ok(())
+        Ok(Acknowledgement::no())
     }
 
     fn in_body_other_end_tag_loop(
         &mut self,
         node: &ElementNode,
         token: TagToken,
-    ) -> Result<(), HtmlParseError> {
+    ) -> Result<Acknowledgement, HtmlParseError> {
         while node.name == token.tag_name {
             self.generate_implied_end_tags(Some(&token.tag_name))?;
 
@@ -755,7 +798,7 @@ impl HtmlParser {
             self.open_elements.pop();
 
             // stop these steps
-            return Ok(());
+            return Ok(Acknowledgement::no());
         }
 
         // if node is in special category, parse error and ignore token
@@ -763,20 +806,20 @@ impl HtmlParser {
             self.handle_error(HtmlParserError::MinorError(String::from(
                 "node is in special category",
             )))?;
-            return Ok(());
+            return Ok(Acknowledgement::no());
         }
 
         let node = self.current_node_as_element_error()?.clone();
         self.in_body_other_end_tag_loop(&node, token)?;
 
-        Ok(())
+        Ok(Acknowledgement::no())
     }
 
     /// <https://html.spec.whatwg.org/multipage/parsing.html#parsing-main-afterbody>
     pub(super) fn after_body_insertion_mode(
         &mut self,
         token: HtmlToken,
-    ) -> Result<(), HtmlParseError> {
+    ) -> Result<Acknowledgement, HtmlParseError> {
         match token {
             HtmlToken::Character(c)
                 if [
@@ -820,14 +863,14 @@ impl HtmlParser {
             }
         }
 
-        Ok(())
+        Ok(Acknowledgement::no())
     }
 
     /// <https://html.spec.whatwg.org/multipage/parsing.html#the-after-after-body-insertion-mode>
     pub(super) fn after_after_body_insertion_mode(
         &mut self,
         token: HtmlToken,
-    ) -> Result<(), HtmlParseError> {
+    ) -> Result<Acknowledgement, HtmlParseError> {
         match token {
             HtmlToken::Comment(_) => {
                 todo!()
@@ -861,6 +904,6 @@ impl HtmlParser {
             }
         }
 
-        Ok(())
+        Ok(Acknowledgement::no())
     }
 }

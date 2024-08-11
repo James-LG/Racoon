@@ -2,11 +2,12 @@
 
 use std::collections::{hash_map::Entry, HashMap};
 
+use nom::error;
 use thiserror::Error;
 
 use crate::{vecpointer::VecPointerRef, xpath::grammar::XpathItemTreeNode};
 
-use super::{HtmlParseError, HtmlParseErrorType, ParseErrorHandler};
+use super::{Acknowledgement, HtmlParseError, HtmlParseErrorType, ParseErrorHandler};
 
 mod named_character_references;
 mod state_impls;
@@ -70,6 +71,13 @@ impl TagTokenType {
         }
     }
 
+    pub fn self_closing(&self) -> bool {
+        match self {
+            TagTokenType::StartTag(tag) => tag.self_closing,
+            TagTokenType::EndTag(tag) => tag.self_closing,
+        }
+    }
+
     pub fn self_closing_mut(&mut self) -> &mut bool {
         match self {
             TagTokenType::StartTag(tag) => &mut tag.self_closing,
@@ -78,7 +86,7 @@ impl TagTokenType {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TagToken {
     pub tag_name: String,
     pub self_closing: bool,
@@ -95,7 +103,7 @@ impl TagToken {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Attribute {
     pub name: String,
     pub value: String,
@@ -119,7 +127,7 @@ impl CommentToken {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-enum TokenizerState {
+pub(crate) enum TokenizerState {
     Data,
     RCDATA,
     RAWTEXT,
@@ -256,6 +264,16 @@ pub(crate) enum TokenizerError {
     MissingDoctypeName,
     #[error("invalid character sequence after doctype name")]
     InvalidCharacterSequenceAfterDoctypeName,
+    #[error("abrupt closing of empty comment")]
+    AbruptClosingOfEmptyComment,
+    #[error("eof in comment")]
+    EofInComment,
+    #[error("nested comment")]
+    NestedComment,
+    #[error("incorrectly closed comment")]
+    IncorrectlyClosedComment,
+    #[error("eof in script html comment like text")]
+    EofInScriptHtmlCommentLikeText,
 }
 
 pub(crate) trait TokenizerErrorHandler {
@@ -287,7 +305,7 @@ impl TokenizerErrorHandler for DefaultTokenizerErrorHandler {
 }
 
 pub(crate) trait Parser {
-    fn token_emitted(&mut self, token: HtmlToken) -> Result<(), HtmlParseError>;
+    fn token_emitted(&mut self, token: HtmlToken) -> Result<Acknowledgement, HtmlParseError>;
     fn adjusted_current_node(&self) -> Option<&XpathItemTreeNode>;
 }
 
@@ -303,6 +321,7 @@ pub struct Tokenizer<'a> {
     tag_token: Option<TagTokenType>,
     attribute_name: Option<String>,
     character_reference_code: u32,
+    last_emitted_start_tag: Option<TagToken>,
 }
 
 impl<'a> Tokenizer<'a> {
@@ -319,6 +338,7 @@ impl<'a> Tokenizer<'a> {
             doctype_token: None,
             attribute_name: None,
             character_reference_code: 0,
+            last_emitted_start_tag: None,
         }
     }
 
@@ -328,9 +348,36 @@ impl<'a> Tokenizer<'a> {
 
     pub fn emit(&mut self, token: HtmlToken) -> Result<(), HtmlParseError> {
         println!("emitting token: {:?}", token);
-        self.parser.token_emitted(token)?;
+        if let HtmlToken::TagToken(TagTokenType::StartTag(tag)) = &token {
+            self.last_emitted_start_tag = Some(tag.clone());
+        }
+
+        let ack = self.parser.token_emitted(token)?;
+
+        if let Some(state) = ack.tokenizer_state {
+            self.state = state;
+        }
 
         Ok(())
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/parsing.html#appropriate-end-tag-token>
+    pub fn is_appropriate_end_tag_token(&self, end_tag: &TagToken) -> bool {
+        if let Some(last_emitted_start_tag) = &self.last_emitted_start_tag {
+            last_emitted_start_tag.tag_name == end_tag.tag_name
+        } else {
+            false
+        }
+    }
+
+    pub fn is_current_end_tag_token_appropriate(&self) -> bool {
+        if let Some(tag_token) = &self.tag_token {
+            if let TagTokenType::EndTag(end_tag) = tag_token {
+                return self.is_appropriate_end_tag_token(end_tag);
+            }
+        }
+
+        false
     }
 
     pub fn handle_error(&mut self, error: TokenizerError) -> Result<(), HtmlParseError> {
@@ -459,6 +506,12 @@ impl<'a> Tokenizer<'a> {
             .ok_or(HtmlParseError::new("no current doctype found"))
     }
 
+    pub fn current_comment_token_mut(&mut self) -> Result<&mut CommentToken, HtmlParseError> {
+        self.comment_token
+            .as_mut()
+            .ok_or(HtmlParseError::new("no current comment found"))
+    }
+
     /// <https://html.spec.whatwg.org/multipage/parsing.html#charref-in-attribute>
     pub fn charref_in_attribute(&self) -> bool {
         match self.return_state {
@@ -490,7 +543,7 @@ impl<'a> Tokenizer<'a> {
             TokenizerState::Data => self.data_state(),
             TokenizerState::RCDATA => self.rcdata_state(),
             TokenizerState::RAWTEXT => self.rawtext_state(),
-            TokenizerState::ScriptData => todo!(),
+            TokenizerState::ScriptData => self.script_data_state(),
             TokenizerState::PLAINTEXT => todo!(),
             TokenizerState::TagOpen => self.tag_open_state(),
             TokenizerState::EndTagOpen => self.end_tag_open_state(),
@@ -501,23 +554,37 @@ impl<'a> Tokenizer<'a> {
             TokenizerState::RAWTEXTLessThanSign => todo!(),
             TokenizerState::RAWTEXTEndTagOpen => todo!(),
             TokenizerState::RAWTEXTEndTagName => todo!(),
-            TokenizerState::ScriptDataLessThanSign => todo!(),
-            TokenizerState::ScriptDataEndTagOpen => todo!(),
-            TokenizerState::ScriptDataEndTagName => todo!(),
-            TokenizerState::ScriptDataEscapeStart => todo!(),
-            TokenizerState::ScriptDataEscapeStartDash => todo!(),
-            TokenizerState::ScriptDataEscaped => todo!(),
-            TokenizerState::ScriptDataEscapedDash => todo!(),
-            TokenizerState::ScriptDataEscapedDashDash => todo!(),
-            TokenizerState::ScriptDataEscapedLessThanSign => todo!(),
-            TokenizerState::ScriptDataEscapedEndTagOpen => todo!(),
-            TokenizerState::ScriptDataEscapedEndTagName => todo!(),
-            TokenizerState::ScriptDataDoubleEscapeStart => todo!(),
-            TokenizerState::ScriptDataDoubleEscaped => todo!(),
-            TokenizerState::ScriptDataDoubleEscapedDash => todo!(),
-            TokenizerState::ScriptDataDoubleEscapedDashDash => todo!(),
-            TokenizerState::ScriptDataDoubleEscapedLessThanSign => todo!(),
-            TokenizerState::ScriptDataDoubleEscapeEnd => todo!(),
+            TokenizerState::ScriptDataLessThanSign => self.script_data_less_than_sign_state(),
+            TokenizerState::ScriptDataEndTagOpen => self.script_data_end_tag_open_state(),
+            TokenizerState::ScriptDataEndTagName => self.script_data_end_tag_name_state(),
+            TokenizerState::ScriptDataEscapeStart => self.script_data_escape_start_state(),
+            TokenizerState::ScriptDataEscapeStartDash => self.script_data_escape_start_dash_state(),
+            TokenizerState::ScriptDataEscaped => self.script_data_escaped_state(),
+            TokenizerState::ScriptDataEscapedDash => self.script_data_escaped_dash_state(),
+            TokenizerState::ScriptDataEscapedDashDash => self.script_data_escaped_dash_dash_state(),
+            TokenizerState::ScriptDataEscapedLessThanSign => {
+                self.script_data_escaped_less_than_sign_state()
+            }
+            TokenizerState::ScriptDataEscapedEndTagOpen => {
+                self.script_data_escaped_end_tag_open_state()
+            }
+            TokenizerState::ScriptDataEscapedEndTagName => {
+                self.script_data_escaped_end_tag_name_state()
+            }
+            TokenizerState::ScriptDataDoubleEscapeStart => {
+                self.script_data_double_escape_start_state()
+            }
+            TokenizerState::ScriptDataDoubleEscaped => self.script_data_double_escaped_state(),
+            TokenizerState::ScriptDataDoubleEscapedDash => {
+                self.script_data_double_escaped_dash_state()
+            }
+            TokenizerState::ScriptDataDoubleEscapedDashDash => {
+                self.script_data_double_escaped_dash_dash_state()
+            }
+            TokenizerState::ScriptDataDoubleEscapedLessThanSign => {
+                self.script_data_double_escaped_less_than_sign_state()
+            }
+            TokenizerState::ScriptDataDoubleEscapeEnd => self.script_data_double_escape_end_state(),
             TokenizerState::BeforeAttributeName => self.before_attribute_name_state(),
             TokenizerState::AttributeName => self.attribute_name_state(),
             TokenizerState::AfterAttributeName => self.after_attribute_name_state(),
@@ -531,18 +598,22 @@ impl<'a> Tokenizer<'a> {
             TokenizerState::AttributeValueUnquoted => self.attribute_value_unquoted_state(),
             TokenizerState::AfterAttributeValueQuoted => self.after_attribute_value_quoted_state(),
             TokenizerState::SelfClosingStartTag => self.self_closing_start_tag_state(),
-            TokenizerState::BogusComment => todo!(),
+            TokenizerState::BogusComment => self.bogus_comment_state(),
             TokenizerState::MarkupDeclarationOpen => self.markup_declaration_open_state(),
-            TokenizerState::CommentStart => todo!(),
-            TokenizerState::CommentStartDash => todo!(),
-            TokenizerState::Comment => todo!(),
-            TokenizerState::CommentLessThanSign => todo!(),
-            TokenizerState::CommentLessThanSignBang => todo!(),
-            TokenizerState::CommentLessThanSignBangDash => todo!(),
-            TokenizerState::CommentLessThanSignBangDashDash => todo!(),
-            TokenizerState::CommentEndDash => todo!(),
-            TokenizerState::CommentEnd => todo!(),
-            TokenizerState::CommentEndBang => todo!(),
+            TokenizerState::CommentStart => self.comment_start_state(),
+            TokenizerState::CommentStartDash => self.comment_start_dash_state(),
+            TokenizerState::Comment => self.comment_state(),
+            TokenizerState::CommentLessThanSign => self.comment_less_than_sign_state(),
+            TokenizerState::CommentLessThanSignBang => self.comment_less_than_sign_bang_state(),
+            TokenizerState::CommentLessThanSignBangDash => {
+                self.comment_less_than_sign_bang_dash_state()
+            }
+            TokenizerState::CommentLessThanSignBangDashDash => {
+                self.comment_less_than_sign_bang_dash_dash_state()
+            }
+            TokenizerState::CommentEndDash => self.comment_end_dash_state(),
+            TokenizerState::CommentEnd => self.comment_end_state(),
+            TokenizerState::CommentEndBang => self.comment_end_bang_state(),
             TokenizerState::DOCTYPE => self.doctype_state(),
             TokenizerState::BeforeDOCTYPEName => self.before_doctype_name(),
             TokenizerState::DOCTYPEName => self.doctype_name_state(),
