@@ -228,6 +228,104 @@ impl<'a> Tokenizer<'a> {
         Ok(())
     }
 
+    /// <https://html.spec.whatwg.org/multipage/parsing.html#rcdata-less-than-sign-state>
+    pub(super) fn rcdata_less_than_sign_state(&mut self) -> Result<(), HtmlParseError> {
+        match self.input_stream.next() {
+            Some('/') => {
+                self.temporary_buffer.clear();
+                self.state = TokenizerState::RCDATAEndTagOpen;
+            }
+            _ => {
+                self.emit(HtmlToken::Character('<'))?;
+                self.reconsume_in_state(TokenizerState::RCDATA)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/parsing.html#rcdata-end-tag-open-state>
+    pub(super) fn rcdata_end_tag_open_state(&mut self) -> Result<(), HtmlParseError> {
+        match self.input_stream.next() {
+            Some(c) if c.is_ascii_alphabetic() => {
+                self.tag_token = Some(TagTokenType::EndTag(TagToken::new(String::new())));
+                self.reconsume_in_state(TokenizerState::RCDATAEndTagName)?;
+            }
+            _ => {
+                self.emit(HtmlToken::Character('<'))?;
+                self.emit(HtmlToken::Character('/'))?;
+                self.reconsume_in_state(TokenizerState::RCDATA)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/parsing.html#rcdata-end-tag-name-state>
+    pub(super) fn rcdata_end_tag_name_state(&mut self) -> Result<(), HtmlParseError> {
+        fn anything_else(tokenizer: &mut Tokenizer) -> Result<(), HtmlParseError> {
+            tokenizer.emit(HtmlToken::Character('<'))?;
+            tokenizer.emit(HtmlToken::Character('/'))?;
+
+            let chars: Vec<char> = tokenizer.temporary_buffer.drain(..).collect();
+            for c in chars.into_iter() {
+                tokenizer.emit(HtmlToken::Character(c))?;
+            }
+
+            tokenizer.reconsume_in_state(TokenizerState::RCDATA)?;
+            Ok(())
+        }
+
+        match self.input_stream.next() {
+            Some(
+                &chars::CHARACTER_TABULATION
+                | &chars::LINE_FEED
+                | &chars::FORM_FEED
+                | &chars::SPACE,
+            ) => {
+                if self.is_current_end_tag_token_appropriate() {
+                    self.state = TokenizerState::BeforeAttributeName;
+                    return Ok(());
+                }
+
+                anything_else(self)?;
+            }
+            Some('/') => {
+                if self.is_current_end_tag_token_appropriate() {
+                    self.state = TokenizerState::SelfClosingStartTag;
+                    return Ok(());
+                }
+
+                anything_else(self)?;
+            }
+            Some('>') => {
+                if self.is_current_end_tag_token_appropriate() {
+                    self.state = TokenizerState::Data;
+                    self.emit_current_tag_token()?;
+                    return Ok(());
+                }
+
+                anything_else(self)?;
+            }
+            Some(c) if c.is_ascii_uppercase() => {
+                let c = *c;
+                let lowercase = c.to_ascii_lowercase();
+                self.current_tag_token_mut()?.tag_name_mut().push(lowercase);
+
+                self.temporary_buffer.push(c);
+            }
+            Some(c) if c.is_ascii_lowercase() => {
+                let c = *c;
+                self.current_tag_token_mut()?.tag_name_mut().push(c);
+
+                self.temporary_buffer.push(c);
+            }
+            _ => anything_else(self)?,
+        }
+
+        Ok(())
+    }
+
     /// <https://html.spec.whatwg.org/multipage/parsing.html#script-data-less-than-sign-state>
     pub(super) fn script_data_less_than_sign_state(&mut self) -> Result<(), HtmlParseError> {
         match self.input_stream.next() {

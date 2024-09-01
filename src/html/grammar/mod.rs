@@ -6,7 +6,7 @@ use indextree::{Arena, NodeId};
 use log::warn;
 use nom::error;
 use thiserror::Error;
-use tokenizer::{CommentToken, HtmlToken, Parser, TagToken};
+use tokenizer::{CommentToken, HtmlToken, Parser, TagToken, TagTokenType, TokenizerState};
 
 use crate::{
     vecpointer::VecPointerRef,
@@ -29,7 +29,7 @@ mod insertion_mode_impls;
 mod tokenizer;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-enum InsertionMode {
+pub(crate) enum InsertionMode {
     Initial,
     BeforeHtml,
     BeforeHead,
@@ -228,6 +228,11 @@ pub(crate) struct CreateAnElementForTheTokenResult {
     attributes: Vec<AttributeNode>,
 }
 
+pub(crate) enum NodeOrMarker {
+    Node(NodeId),
+    Marker,
+}
+
 pub struct HtmlParser {
     error_handler: Box<dyn ParseErrorHandler>,
     insertion_mode: InsertionMode,
@@ -238,7 +243,7 @@ pub struct HtmlParser {
     root_node: Option<NodeId>,
     foster_parenting: bool,
     frameset_ok: bool,
-    active_formatting_elements: Vec<NodeId>,
+    active_formatting_elements: Vec<NodeOrMarker>,
     stack_of_template_insertion_modes: Vec<InsertionMode>,
     head_element_pointer: Option<NodeId>,
     form_element_pointer: Option<NodeId>,
@@ -712,6 +717,91 @@ impl HtmlParser {
         Ok(())
     }
 
+    /// <https://html.spec.whatwg.org/multipage/parsing.html#generic-rcdata-element-parsing-algorithm>
+    pub(crate) fn generic_rcdata_element_parsing_algorithm(
+        &mut self,
+        token: TagToken,
+    ) -> Result<Acknowledgement, HtmlParseError> {
+        self.insert_an_html_element(token)?;
+
+        self.original_insertion_mode = Some(self.insertion_mode);
+        self.insertion_mode = InsertionMode::Text;
+
+        Ok(Acknowledgement {
+            self_closed: false,
+            tokenizer_state: Some(TokenizerState::RCDATA),
+        })
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/parsing.html#push-onto-the-list-of-active-formatting-elements>
+    pub(crate) fn push_onto_the_list_of_active_formatting_elements(
+        &mut self,
+        element_id: NodeId,
+    ) -> Result<(), HtmlParseError> {
+        let element = self
+            .arena
+            .get(element_id)
+            .unwrap()
+            .get()
+            .as_element_node()
+            .map_err(|_| HtmlParseError::new("node is not an element node"))?;
+
+        let elements_since_marker = self.active_formatting_elements.iter().map_while(
+            |node_or_marker| match node_or_marker {
+                NodeOrMarker::Node(node_id) => {
+                    let node = self.arena.get(*node_id).unwrap().get();
+                    match node {
+                        XpathItemTreeNode::ElementNode(element) => Some(element),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            },
+        );
+
+        let element_attributes = element.attributes_arena(&self.arena);
+        let matching_elements = elements_since_marker
+            .filter(|e| {
+                if e.name != element.name || e.namespace != element.namespace {
+                    return false;
+                }
+
+                let e_attributes = e.attributes_arena(&self.arena);
+                if e_attributes.len() != element_attributes.len() {
+                    return false;
+                }
+
+                for (i, attribute) in e_attributes.iter().enumerate() {
+                    if attribute.name != element_attributes[i].name
+                        || attribute.value != element_attributes[i].value
+                    {
+                        return false;
+                    }
+                }
+
+                true
+            })
+            .collect::<Vec<&ElementNode>>();
+
+        if matching_elements.len() >= 3 {
+            // remove the earliest matching element from the list
+            let earliest_element = matching_elements[0];
+            let earliest_element_id = earliest_element.id();
+            self.active_formatting_elements.retain(|node_or_marker| {
+                if let NodeOrMarker::Node(node_id) = node_or_marker {
+                    return *node_id != earliest_element_id;
+                }
+
+                true
+            });
+        }
+
+        self.active_formatting_elements
+            .push(NodeOrMarker::Node(element_id));
+
+        Ok(())
+    }
+
     /// <https://html.spec.whatwg.org/multipage/parsing.html#stop-parsing>
     pub(crate) fn stop_parsing(&mut self) -> Result<(), HtmlParseError> {
         // mostly scripting stuff that is unsupported by Skyscraper
@@ -763,7 +853,7 @@ impl Parser for HtmlParser {
             InsertionMode::InHeadNoscript => todo!(),
             InsertionMode::AfterHead => self.after_head_insertion_mode(token),
             InsertionMode::InBody => self.in_body_insertion_mode(token),
-            InsertionMode::Text => todo!(),
+            InsertionMode::Text => self.text_insertion_mode(token),
             InsertionMode::InTable => todo!(),
             InsertionMode::InTableText => todo!(),
             InsertionMode::InCaption => todo!(),

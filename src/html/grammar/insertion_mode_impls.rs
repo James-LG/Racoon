@@ -1,5 +1,7 @@
+use std::vec;
+
 use crate::{
-    html::grammar::{tokenizer::TokenizerState, SPECIAL_ELEMENTS},
+    html::grammar::{tokenizer::TokenizerState, NodeOrMarker, SPECIAL_ELEMENTS},
     xpath::grammar::{
         data_model::{AttributeNode, ElementNode},
         XpathItemTreeNode,
@@ -197,7 +199,9 @@ impl HtmlParser {
             {
                 self.insert_character(vec![c])?;
             }
-            HtmlToken::Comment(_) => todo!(),
+            HtmlToken::Comment(comment) => {
+                self.insert_a_comment(comment, None)?;
+            }
             HtmlToken::DocType(_) => todo!(),
             HtmlToken::TagToken(TagTokenType::StartTag(token)) if token.tag_name == "html" => {
                 todo!()
@@ -223,7 +227,7 @@ impl HtmlParser {
                 return Ok(Acknowledgement::yes());
             }
             HtmlToken::TagToken(TagTokenType::StartTag(token)) if token.tag_name == "title" => {
-                todo!()
+                return self.generic_rcdata_element_parsing_algorithm(token);
             }
             HtmlToken::TagToken(TagTokenType::StartTag(token))
                 if ["noframes", "style"].contains(&token.tag_name.as_str()) =>
@@ -250,7 +254,9 @@ impl HtmlParser {
                 });
             }
             HtmlToken::TagToken(TagTokenType::EndTag(token)) if token.tag_name == "head" => {
-                todo!()
+                self.open_elements.pop().expect("open elements is empty");
+
+                self.insertion_mode = InsertionMode::AfterHead;
             }
             HtmlToken::TagToken(TagTokenType::EndTag(token))
                 if ["body", "html", "br"].contains(&token.tag_name.as_str()) =>
@@ -292,14 +298,17 @@ impl HtmlParser {
             Ok(())
         }
         match token {
-            HtmlToken::Character(
-                chars::CHARACTER_TABULATION
-                | chars::LINE_FEED
-                | chars::FORM_FEED
-                | chars::CARRIAGE_RETURN
-                | chars::SPACE,
-            ) => {
-                todo!()
+            HtmlToken::Character(c)
+                if [
+                    chars::CHARACTER_TABULATION,
+                    chars::LINE_FEED,
+                    chars::FORM_FEED,
+                    chars::CARRIAGE_RETURN,
+                    chars::SPACE,
+                ]
+                .contains(&c) =>
+            {
+                self.insert_character(vec![c])?;
             }
             HtmlToken::Comment(_) => todo!(),
             HtmlToken::DocType(_) => todo!(),
@@ -460,10 +469,16 @@ impl HtmlParser {
                 ]
                 .contains(&token.tag_name.as_str()) =>
             {
-                todo!()
+                self.using_the_rules_for(
+                    HtmlToken::TagToken(TagTokenType::StartTag(token)),
+                    InsertionMode::InHead,
+                )?;
             }
             HtmlToken::TagToken(TagTokenType::EndTag(token)) if token.tag_name == "template" => {
-                todo!()
+                self.using_the_rules_for(
+                    HtmlToken::TagToken(TagTokenType::EndTag(token)),
+                    InsertionMode::InHead,
+                )?;
             }
             HtmlToken::TagToken(TagTokenType::StartTag(token)) if token.tag_name == "body" => {
                 if !self.has_an_element_in_scope("body") {
@@ -654,7 +669,39 @@ impl HtmlParser {
                 todo!()
             }
             HtmlToken::TagToken(TagTokenType::StartTag(token)) if token.tag_name == "a" => {
-                todo!()
+                // if the active formatting element list contains an `a` element between the end of the list and the last marker
+                // then this is a parse error
+                if self
+                    .active_formatting_elements
+                    .iter()
+                    .rev()
+                    .map_while(|node| {
+                        if let NodeOrMarker::Node(node) = node {
+                            Some(node)
+                        } else {
+                            None
+                        }
+                    })
+                    .any(|node| {
+                        if let XpathItemTreeNode::ElementNode(element) =
+                            self.arena.get(*node).unwrap().get()
+                        {
+                            element.name == "a"
+                        } else {
+                            false
+                        }
+                    })
+                {
+                    self.handle_error(HtmlParserError::MinorError(String::from(
+                        "active formatting elements contains an a element",
+                    )))?;
+                    todo!("adoption agency algorithm")
+                }
+
+                self.reconstruct_the_active_formatting_elements()?;
+
+                let element_id = self.insert_an_html_element(token)?;
+                self.push_onto_the_list_of_active_formatting_elements(element_id)?;
             }
             HtmlToken::TagToken(TagTokenType::StartTag(token))
                 if [
@@ -769,6 +816,43 @@ impl HtmlParser {
                 let node = self.current_node_as_element_error()?.clone();
 
                 self.in_body_other_end_tag_loop(&node, token)?;
+            }
+        }
+
+        Ok(Acknowledgement::no())
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/parsing.html#parsing-main-incdata>
+    pub(super) fn text_insertion_mode(
+        &mut self,
+        token: HtmlToken,
+    ) -> Result<Acknowledgement, HtmlParseError> {
+        match token {
+            HtmlToken::Character(c) => {
+                self.insert_character(vec![c])?;
+            }
+            HtmlToken::EndOfFile => {
+                todo!()
+            }
+            HtmlToken::TagToken(TagTokenType::EndTag(token)) if token.tag_name == "script" => {
+                let script = self.current_node_as_element_error()?;
+
+                self.open_elements.pop().expect("open elements is empty");
+
+                self.insertion_mode = self
+                    .original_insertion_mode
+                    .expect("original insertion mode is None");
+
+                // lots of unsupported scripting logic would go here
+                // it is intentionally not included
+            }
+            HtmlToken::TagToken(TagTokenType::EndTag(_token)) => {
+                self.open_elements.pop().expect("open elements is empty");
+
+                self.insertion_mode = self.original_insertion_mode.unwrap();
+            }
+            _ => {
+                // ignore
             }
         }
 
