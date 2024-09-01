@@ -50,7 +50,7 @@ pub(crate) fn xpath(input: &str) -> Res<&str, Xpath> {
 }
 
 /// An XPath expression.
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub struct Xpath(pub Expr);
 
 impl Display for Xpath {
