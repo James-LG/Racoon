@@ -2,6 +2,7 @@
 
 use std::collections::{hash_map::Entry, HashMap};
 
+use indextree::NodeId;
 use nom::error;
 use thiserror::Error;
 
@@ -12,7 +13,7 @@ use super::{Acknowledgement, HtmlParseError, HtmlParseErrorType, ParseErrorHandl
 mod named_character_references;
 mod state_impls;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum HtmlToken {
     DocType(DoctypeToken),
     TagToken(TagTokenType),
@@ -21,7 +22,7 @@ pub enum HtmlToken {
     EndOfFile,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DoctypeToken {
     pub name: String,
     pub force_quirks: bool,
@@ -36,7 +37,7 @@ impl DoctypeToken {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum TagTokenType {
     StartTag(TagToken),
     EndTag(TagToken),
@@ -115,7 +116,7 @@ impl Attribute {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CommentToken {
     pub data: String,
 }

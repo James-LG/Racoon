@@ -129,6 +129,10 @@ pub fn parse(text: &str) -> Result<XpathItemTree, HtmlParseError> {
 
 /// <https://infra.spec.whatwg.org/#html-namespace>
 pub(crate) const HTML_NAMESPACE: &str = "http://www.w3.org/1999/xhtml";
+
+/// <https://infra.spec.whatwg.org/#svg-namespace>
+pub(crate) const SVG_NAMESPACE: &str = "http://www.w3.org/2000/svg";
+
 pub(crate) static ELEMENT_IN_SCOPE_TYPES: [&str; 9] = [
     "applet", "caption", "html", "table", "td", "th", "marquee", "object", "template",
 ];
@@ -228,9 +232,16 @@ pub(crate) struct CreateAnElementForTheTokenResult {
     attributes: Vec<AttributeNode>,
 }
 
+#[derive(Debug, Clone)]
 pub(crate) enum NodeOrMarker {
-    Node(NodeId),
+    Node(NodeEntry),
     Marker,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct NodeEntry {
+    node_id: NodeId,
+    token: TagToken,
 }
 
 pub struct HtmlParser {
@@ -313,6 +324,21 @@ impl HtmlParser {
             .ok_or(HtmlParseError::new("current node is not an element"))
     }
 
+    pub(crate) fn current_node_id(&self) -> Result<NodeId, HtmlParseError> {
+        match self.current_node() {
+            Some(node) => match node {
+                XpathItemTreeNode::ElementNode(element) => Ok(element.id()),
+                XpathItemTreeNode::AttributeNode(attribute) => Ok(attribute.id()),
+                XpathItemTreeNode::TextNode(text) => Ok(text.id()),
+                _ => Err(HtmlParseError::new(&format!(
+                    "current node has no id {:?}",
+                    node
+                ))),
+            },
+            None => Err(HtmlParseError::new("no current node")),
+        }
+    }
+
     pub(crate) fn top_node(&self) -> Option<&XpathItemTreeNode> {
         self.open_elements
             .first()
@@ -348,6 +374,15 @@ impl HtmlParser {
             .iter()
             .map(|id| self.arena.get(*id).unwrap().get())
             .collect()
+    }
+
+    pub(crate) fn open_elements_has_element(&self, tag_name: &str) -> bool {
+        self.open_elements
+            .iter()
+            .any(|id| match self.arena.get(*id).unwrap().get() {
+                XpathItemTreeNode::ElementNode(element) => element.name == tag_name,
+                _ => false,
+            })
     }
 
     pub(crate) fn handle_error(&self, error: HtmlParserError) -> Result<(), HtmlParseError> {
@@ -445,14 +480,14 @@ impl HtmlParser {
     pub(crate) fn insert_a_comment(
         &mut self,
         comment: CommentToken,
-        parent: Option<NodeId>,
+        parent_override: Option<NodeId>,
     ) -> Result<(), HtmlParseError> {
         let comment_node = XpathItemTreeNode::CommentNode(CommentNode {
             content: comment.data,
         });
         let comment_id = self.new_node(comment_node);
 
-        let adjusted_insertion_location = if let Some(parent) = parent {
+        let adjusted_insertion_location = if let Some(parent) = parent_override {
             parent
         } else {
             self.appropriate_place_for_inserting_a_node(None)?
@@ -547,11 +582,105 @@ impl HtmlParser {
     pub(crate) fn reconstruct_the_active_formatting_elements(
         &mut self,
     ) -> Result<(), HtmlParseError> {
+        fn step_4_rewind(
+            parser: &mut HtmlParser,
+            entry: &NodeEntry,
+            entry_index: usize,
+        ) -> Result<(), HtmlParseError> {
+            let new_entry_index = parser
+                .active_formatting_elements
+                .iter()
+                .position(|e| {
+                    if let NodeOrMarker::Node(NodeEntry { node_id, .. }) = e {
+                        return *node_id == entry.node_id;
+                    } else {
+                        return false;
+                    }
+                })
+                .and_then(|i| if i == 0 { None } else { Some(i - 1) });
+
+            // if there are no entries before entry_id in the list of active formatting elements, then jump to step 8 (create)
+            match new_entry_index {
+                None => return step_8_create(parser, entry, entry_index),
+                Some(new_entry_index) => {
+                    let new_entry = parser
+                        .active_formatting_elements
+                        .get(new_entry_index)
+                        .expect("could not get new entry")
+                        .clone();
+
+                    if let NodeOrMarker::Node(new_entry) = new_entry {
+                        // if new_entry is not a marker and is not in the list of open elements, then jump to step 4 (rewind)
+                        if !parser.open_elements.contains(&new_entry.node_id) {
+                            return step_4_rewind(parser, &new_entry, new_entry_index);
+                        }
+                    }
+
+                    return step_7_advance(parser, new_entry_index);
+                }
+            }
+        }
+
+        fn step_7_advance(
+            parser: &mut HtmlParser,
+            entry_index: usize,
+        ) -> Result<(), HtmlParseError> {
+            let (new_index, new_entry) = parser
+                .active_formatting_elements
+                .iter()
+                .enumerate()
+                .skip(entry_index + 1)
+                .find_map(|(i, e)| {
+                    if let NodeOrMarker::Node(entry) = e {
+                        return Some((i, entry));
+                    }
+
+                    None
+                })
+                .map(|(i, e)| (i, e.clone()))
+                .expect("could not get new entry");
+
+            return step_8_create(parser, &new_entry, new_index);
+        }
+
+        fn step_8_create(
+            parser: &mut HtmlParser,
+            entry: &NodeEntry,
+            index: usize,
+        ) -> Result<(), HtmlParseError> {
+            let element = parser.insert_an_html_element(entry.token.clone())?;
+
+            // replace the entry
+            let new_entry = NodeEntry {
+                node_id: element,
+                token: entry.token.clone(),
+            };
+
+            // replace the entry in the list of active formatting elements
+            parser.active_formatting_elements[index] = NodeOrMarker::Node(new_entry.clone());
+
+            // if the entry was not the last entry in the list of active formatting elements, then jump to advance
+            if index != parser.active_formatting_elements.len() - 1 {
+                return step_7_advance(parser, index);
+            }
+
+            return Ok(());
+        }
+
         if self.active_formatting_elements.is_empty() {
             return Ok(());
         }
 
-        todo!()
+        let entry = match self.active_formatting_elements.last().unwrap() {
+            NodeOrMarker::Node(entry) => entry.clone(),
+            NodeOrMarker::Marker => return Ok(()),
+        };
+
+        if self.open_elements.contains(&entry.node_id) {
+            return Ok(());
+        }
+
+        step_4_rewind(self, &entry, self.active_formatting_elements.len() - 1)
     }
 
     /// <https://html.spec.whatwg.org/multipage/parsing.html#insert-a-character>
@@ -639,6 +768,15 @@ impl HtmlParser {
         self.has_an_element_in_the_specific_scope(tag_name, element_types)
     }
 
+    /// <https://html.spec.whatwg.org/multipage/parsing.html#has-an-element-in-list-item-scope>
+    pub(crate) fn has_an_element_in_list_item_scope(&self, tag_name: &str) -> bool {
+        let mut element_types = ELEMENT_IN_SCOPE_TYPES.to_vec();
+        element_types.push("ol");
+        element_types.push("ul");
+
+        self.has_an_element_in_the_specific_scope(tag_name, element_types)
+    }
+
     /// <https://html.spec.whatwg.org/multipage/parsing.html#close-a-p-element>
     pub(crate) fn close_a_p_element(&mut self) -> Result<(), HtmlParseError> {
         self.generate_implied_end_tags(Some("p"))?;
@@ -663,9 +801,9 @@ impl HtmlParser {
         while let Some(node) = self.current_node() {
             if let XpathItemTreeNode::ElementNode(element) = node {
                 if element.name == tag_name {
-                    self.open_elements.pop();
                     break;
                 }
+                self.open_elements.pop();
             }
         }
 
@@ -737,6 +875,7 @@ impl HtmlParser {
     pub(crate) fn push_onto_the_list_of_active_formatting_elements(
         &mut self,
         element_id: NodeId,
+        token: TagToken,
     ) -> Result<(), HtmlParseError> {
         let element = self
             .arena
@@ -748,8 +887,8 @@ impl HtmlParser {
 
         let elements_since_marker = self.active_formatting_elements.iter().map_while(
             |node_or_marker| match node_or_marker {
-                NodeOrMarker::Node(node_id) => {
-                    let node = self.arena.get(*node_id).unwrap().get();
+                NodeOrMarker::Node(entry) => {
+                    let node = self.arena.get(entry.node_id).unwrap().get();
                     match node {
                         XpathItemTreeNode::ElementNode(element) => Some(element),
                         _ => None,
@@ -788,8 +927,8 @@ impl HtmlParser {
             let earliest_element = matching_elements[0];
             let earliest_element_id = earliest_element.id();
             self.active_formatting_elements.retain(|node_or_marker| {
-                if let NodeOrMarker::Node(node_id) = node_or_marker {
-                    return *node_id != earliest_element_id;
+                if let NodeOrMarker::Node(entry) = node_or_marker {
+                    return entry.node_id != earliest_element_id;
                 }
 
                 true
@@ -797,7 +936,45 @@ impl HtmlParser {
         }
 
         self.active_formatting_elements
-            .push(NodeOrMarker::Node(element_id));
+            .push(NodeOrMarker::Node(NodeEntry {
+                node_id: element_id,
+                token,
+            }));
+
+        Ok(())
+    }
+
+    /// Gets active formatting elements between the end of the list and the last marker,
+    /// if there is a marker, or the start of the list otherwise.
+    pub(crate) fn active_formatting_elements_until_marker(
+        &self,
+    ) -> impl Iterator<Item = &ElementNode> {
+        self.active_formatting_elements
+            .iter()
+            .rev()
+            .map_while(|node_or_marker| {
+                if let NodeOrMarker::Node(entry) = node_or_marker {
+                    let node = self.arena.get(entry.node_id).unwrap().get();
+                    if let XpathItemTreeNode::ElementNode(element) = node {
+                        return Some(element);
+                    }
+                }
+
+                None
+            })
+    }
+
+    pub(crate) fn remove_from_active_formatting_elements(
+        &mut self,
+        element_id: NodeId,
+    ) -> Result<(), HtmlParseError> {
+        self.active_formatting_elements.retain(|node_or_marker| {
+            if let NodeOrMarker::Node(entry) = node_or_marker {
+                return entry.node_id != element_id;
+            }
+
+            true
+        });
 
         Ok(())
     }
