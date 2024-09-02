@@ -445,7 +445,7 @@ pub mod test_helpers {
         let html_node = document.get_html_node(&key).unwrap();
 
         let node_text = html_node.extract_as_text();
-        assert_eq!(text, node_text.value.trim());
+        assert_eq!(text, node_text.value().trim());
     }
 }
 
