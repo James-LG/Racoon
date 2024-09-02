@@ -1,4 +1,4 @@
-use skyscraper::html;
+use skyscraper::html::{self, unescape_characters};
 
 #[test]
 fn text_should_include_text_before_between_and_after_child_element() {
@@ -47,7 +47,7 @@ fn text_should_unescape_characters() {
 
     let child = children.next().unwrap();
     let html_text = document.get_html_node(&child).unwrap().extract_as_text();
-    assert_eq!(html_text.value, r##"&"'<>`"##);
+    assert_eq!(html_text.value(), r##"&"'<>`"##);
 }
 
 #[test]

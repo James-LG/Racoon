@@ -21,7 +21,7 @@ pub use expressions::Xpath;
 use indextree::{Arena, NodeId};
 
 use crate::{
-    html::{DocumentNode, HtmlDocument, HtmlNode},
+    html::{unescape_characters, DocumentNode, HtmlDocument, HtmlNode},
     xpath::grammar::data_model::{
         AttributeNode, CommentNode, ElementNode, PINode, TextNode, XpathDocumentNode,
     },
@@ -161,7 +161,8 @@ impl<'a> TextIter<'a> {
         for child in node.children(tree) {
             match child {
                 XpathItemTreeNode::TextNode(text) => {
-                    iter_chain = Box::new(iter_chain.chain(iter::once(text.content.clone())));
+                    let content = unescape_characters(text.content.as_str());
+                    iter_chain = Box::new(iter_chain.chain(iter::once(content)));
                 }
                 XpathItemTreeNode::ElementNode(_child_element) => {
                     iter_chain = Box::new(iter_chain.chain(TextIter::new(tree, child)));

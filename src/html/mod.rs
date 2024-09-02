@@ -89,7 +89,7 @@ impl HtmlTag {
                 match child_node {
                     HtmlNode::Text(text) => {
                         // If the child is a text, simply append its text.
-                        o_text = Some(HtmlTag::append_text(o_text, text.value.to_string()));
+                        o_text = Some(HtmlTag::append_text(o_text, text.value()));
                     }
                     HtmlNode::Tag(_) => {
                         // If the child is a tag, only append its text if recurse=true was passed,
@@ -128,7 +128,9 @@ impl HtmlTag {
 /// Text content in an HTML document.
 #[derive(PartialEq, Clone, Debug)]
 pub struct HtmlText {
-    /// The text content.
+    /// The raw text content.
+    ///
+    /// Use [HtmlText::value] to get the unescaped text.
     ///
     /// If the text has non-whitespace characters, it is trimmed.
     /// Otherwise, if the text is solely whitespace, it is kept as-is.
@@ -141,11 +143,19 @@ pub struct HtmlText {
 impl HtmlText {
     /// Creates a new [HtmlText] from the given string.
     pub fn from_str(value: &str) -> HtmlText {
-        let text = unescape_characters(value);
         HtmlText {
-            value: text.to_string(),
-            only_whitespace: text.trim().is_empty(),
+            value: value.to_string(),
+            only_whitespace: value.trim().is_empty(),
         }
+    }
+
+    /// The text content.
+    ///
+    /// If the text has non-whitespace characters, it is trimmed.
+    /// Otherwise, if the text is solely whitespace, it is kept as-is.
+    /// This emulates the behaviour of Chromium browsers.
+    pub fn value(&self) -> String {
+        unescape_characters(&self.value)
     }
 }
 
@@ -265,7 +275,7 @@ impl HtmlNode {
                     tag.get_text(doc_node, document)
                 }
             }
-            HtmlNode::Text(text) => Some(text.value.to_string()),
+            HtmlNode::Text(text) => Some(text.value()),
         }
     }
 
@@ -393,7 +403,7 @@ fn display_node(
             }
         }
         HtmlNode::Text(text) => {
-            let output_text = escape_characters(text.value.as_str());
+            let output_text = text.value.as_str();
             match format_type {
                 DocumentFormatType::Standard => {
                     write!(&mut str, "{}", output_text)?;
