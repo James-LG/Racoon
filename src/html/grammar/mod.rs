@@ -247,15 +247,15 @@ pub(crate) struct NodeEntry {
 pub struct HtmlParser {
     error_handler: Box<dyn ParseErrorHandler>,
     insertion_mode: InsertionMode,
+    template_insertion_modes: Vec<InsertionMode>,
     original_insertion_mode: Option<InsertionMode>,
     open_elements: Vec<NodeId>,
-    context_element: Option<XpathItemTreeNode>,
+    context_element: Option<NodeId>,
     arena: Arena<XpathItemTreeNode>,
     root_node: Option<NodeId>,
     foster_parenting: bool,
     frameset_ok: bool,
     active_formatting_elements: Vec<NodeOrMarker>,
-    stack_of_template_insertion_modes: Vec<InsertionMode>,
     head_element_pointer: Option<NodeId>,
     form_element_pointer: Option<NodeId>,
 }
@@ -265,6 +265,7 @@ impl HtmlParser {
         HtmlParser {
             error_handler: Box::new(DefaultParseErrorHandler),
             insertion_mode: InsertionMode::Initial,
+            template_insertion_modes: Vec::new(),
             original_insertion_mode: None,
             open_elements: Vec::new(),
             context_element: None,
@@ -273,7 +274,6 @@ impl HtmlParser {
             foster_parenting: false,
             frameset_ok: true,
             active_formatting_elements: Vec::new(),
-            stack_of_template_insertion_modes: Vec::new(),
             head_element_pointer: None,
             form_element_pointer: None,
         }
@@ -309,7 +309,16 @@ impl HtmlParser {
     pub(crate) fn current_node(&self) -> Option<&XpathItemTreeNode> {
         self.open_elements
             .last()
-            .map(|id| self.arena.get(*id).unwrap().get())
+            .and_then(|id| self.arena.get(*id).map(|node| node.get()))
+    }
+
+    pub(crate) fn current_node_id(&self) -> Option<NodeId> {
+        self.open_elements.last().map(|id| *id)
+    }
+
+    pub(crate) fn current_node_id_result(&self) -> Result<NodeId, HtmlParseError> {
+        self.current_node_id()
+            .ok_or(HtmlParseError::new("no current node"))
     }
 
     pub(crate) fn current_node_as_element(&self) -> Option<&ElementNode> {
@@ -319,24 +328,14 @@ impl HtmlParser {
         })
     }
 
-    pub(crate) fn current_node_as_element_error(&self) -> Result<&ElementNode, HtmlParseError> {
+    pub(crate) fn current_node_as_element_result(&self) -> Result<&ElementNode, HtmlParseError> {
         self.current_node_as_element()
             .ok_or(HtmlParseError::new("current node is not an element"))
     }
 
-    pub(crate) fn current_node_id(&self) -> Result<NodeId, HtmlParseError> {
-        match self.current_node() {
-            Some(node) => match node {
-                XpathItemTreeNode::ElementNode(element) => Ok(element.id()),
-                XpathItemTreeNode::AttributeNode(attribute) => Ok(attribute.id()),
-                XpathItemTreeNode::TextNode(text) => Ok(text.id()),
-                _ => Err(HtmlParseError::new(&format!(
-                    "current node has no id {:?}",
-                    node
-                ))),
-            },
-            None => Err(HtmlParseError::new("no current node")),
-        }
+    /// <https://html.spec.whatwg.org/multipage/parsing.html#current-template-insertion-mode>
+    pub(crate) fn current_template_insertion_mode(&self) -> Option<InsertionMode> {
+        self.template_insertion_modes.last().map(|mode| *mode)
     }
 
     pub(crate) fn top_node(&self) -> Option<&XpathItemTreeNode> {
@@ -735,13 +734,13 @@ impl HtmlParser {
     /// <https://html.spec.whatwg.org/multipage/parsing.html#has-an-element-in-the-specific-scope>
     pub(crate) fn has_an_element_in_the_specific_scope(
         &self,
-        tag_name: &str,
+        tag_names: Vec<&str>,
         element_types: Vec<&str>,
     ) -> bool {
         for node_id in self.open_elements.iter().rev() {
             if let Some(node) = self.arena.get(*node_id) {
                 if let XpathItemTreeNode::ElementNode(element) = node.get() {
-                    if element.name == tag_name {
+                    if tag_names.contains(&element.name.as_str()) {
                         return true;
                     }
 
@@ -757,7 +756,11 @@ impl HtmlParser {
 
     /// <https://html.spec.whatwg.org/multipage/parsing.html#has-an-element-in-scope>
     pub(crate) fn has_an_element_in_scope(&self, tag_name: &str) -> bool {
-        self.has_an_element_in_the_specific_scope(tag_name, ELEMENT_IN_SCOPE_TYPES.to_vec())
+        self.has_an_element_in_the_specific_scope(vec![tag_name], ELEMENT_IN_SCOPE_TYPES.to_vec())
+    }
+
+    pub(crate) fn has_an_element_in_scope_by_tag_names(&self, tag_names: Vec<&str>) -> bool {
+        self.has_an_element_in_the_specific_scope(tag_names, ELEMENT_IN_SCOPE_TYPES.to_vec())
     }
 
     /// <https://html.spec.whatwg.org/multipage/parsing.html#has-an-element-in-button-scope>
@@ -765,7 +768,7 @@ impl HtmlParser {
         let mut element_types = ELEMENT_IN_SCOPE_TYPES.to_vec();
         element_types.push("button");
 
-        self.has_an_element_in_the_specific_scope(tag_name, element_types)
+        self.has_an_element_in_the_specific_scope(vec![tag_name], element_types)
     }
 
     /// <https://html.spec.whatwg.org/multipage/parsing.html#has-an-element-in-list-item-scope>
@@ -774,7 +777,7 @@ impl HtmlParser {
         element_types.push("ol");
         element_types.push("ul");
 
-        self.has_an_element_in_the_specific_scope(tag_name, element_types)
+        self.has_an_element_in_the_specific_scope(vec![tag_name], element_types)
     }
 
     /// <https://html.spec.whatwg.org/multipage/parsing.html#close-a-p-element>
@@ -798,12 +801,18 @@ impl HtmlParser {
     }
 
     pub(crate) fn pop_until_tag_name(&mut self, tag_name: &str) -> Result<(), HtmlParseError> {
-        while let Some(node) = self.current_node() {
+        self.pop_until_tag_name_one_of(vec![tag_name])
+    }
+    pub(crate) fn pop_until_tag_name_one_of(
+        &mut self,
+        tag_names: Vec<&str>,
+    ) -> Result<(), HtmlParseError> {
+        while let Some(node_id) = self.open_elements.pop() {
+            let node = self.arena.get(node_id).unwrap().get();
             if let XpathItemTreeNode::ElementNode(element) = node {
-                if element.name == tag_name {
+                if tag_names.contains(&element.name.as_str()) {
                     break;
                 }
-                self.open_elements.pop();
             }
         }
 
@@ -979,9 +988,248 @@ impl HtmlParser {
         Ok(())
     }
 
+    /// <https://html.spec.whatwg.org/multipage/parsing.html#clear-the-list-of-active-formatting-elements-up-to-the-last-marker>
+    pub(crate) fn clear_the_list_of_active_formatting_elements_up_to_the_last_marker(
+        &mut self,
+    ) -> Result<(), HtmlParseError> {
+        let last_marker_index = self
+            .active_formatting_elements
+            .iter()
+            .rev()
+            .position(|e| matches!(e, NodeOrMarker::Marker))
+            .unwrap_or(self.active_formatting_elements.len());
+
+        self.active_formatting_elements =
+            self.active_formatting_elements[..last_marker_index].to_vec();
+
+        Ok(())
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/parsing.html#reset-the-insertion-mode-appropriately>
+    pub(crate) fn reset_the_insertion_mode_appropriately(&mut self) -> Result<(), HtmlParseError> {
+        fn step_3_loop(
+            parser: &mut HtmlParser,
+            node_id: NodeId,
+            last: bool,
+        ) -> Result<(), HtmlParseError> {
+            let mut last = last;
+            if node_id == parser.open_elements[0] {
+                last = true;
+
+                // TODO: html fragment parsing algorithm
+            }
+
+            return step_4(parser, node_id, last);
+        }
+
+        fn step_4(
+            parser: &mut HtmlParser,
+            node_id: NodeId,
+            last: bool,
+        ) -> Result<(), HtmlParseError> {
+            fn step_4_3_loop(
+                parser: &mut HtmlParser,
+                ancestor_id: NodeId,
+                last: bool,
+            ) -> Result<(), HtmlParseError> {
+                if ancestor_id == parser.open_elements[0] {
+                    return step_4_8_done(parser);
+                }
+
+                // let ancestor be the node before ancestor in the stack of open elements
+                let ancestor_position = parser
+                    .open_elements
+                    .iter()
+                    .position(|id| *id == ancestor_id)
+                    .ok_or(HtmlParseError::new(
+                        "ancestor id not found in open elements",
+                    ))?;
+                let ancestor_id =
+                    parser
+                        .open_elements
+                        .get(ancestor_position - 1)
+                        .ok_or(HtmlParseError::new(
+                            "ancestor id not found in open elements",
+                        ))?;
+
+                let ancestor = parser
+                    .arena
+                    .get(*ancestor_id)
+                    .unwrap()
+                    .get()
+                    .as_element_node()
+                    .map_err(|_| HtmlParseError::new("ancestor is not an element node"))?;
+
+                if ancestor.name == "template" {
+                    return step_4_8_done(parser);
+                }
+
+                if ancestor.name == "table" {
+                    parser.insertion_mode = InsertionMode::InSelectInTable;
+                    return Ok(());
+                }
+
+                return step_4_3_loop(parser, *ancestor_id, last);
+            }
+
+            fn step_4_8_done(parser: &mut HtmlParser) -> Result<(), HtmlParseError> {
+                parser.insertion_mode = InsertionMode::InSelect;
+                Ok(())
+            }
+            let node = parser
+                .arena
+                .get(node_id)
+                .unwrap()
+                .get()
+                .as_element_node()
+                .map_err(|_| HtmlParseError::new("node is not an element node"))?;
+
+            if node.name == "select" {
+                return step_4_3_loop(parser, node_id, last);
+            }
+
+            if (node.name == "td" || node.name == "th") && !last {
+                parser.insertion_mode = InsertionMode::InCell;
+                return Ok(());
+            }
+
+            if node.name == "tr" {
+                parser.insertion_mode = InsertionMode::InRow;
+                return Ok(());
+            }
+
+            if node.name == "tbody" || node.name == "thead" || node.name == "tfoot" {
+                parser.insertion_mode = InsertionMode::InTableBody;
+                return Ok(());
+            }
+
+            if node.name == "caption" {
+                parser.insertion_mode = InsertionMode::InCaption;
+                return Ok(());
+            }
+
+            if node.name == "colgroup" {
+                parser.insertion_mode = InsertionMode::InColumnGroup;
+                return Ok(());
+            }
+
+            if node.name == "table" {
+                parser.insertion_mode = InsertionMode::InTable;
+                return Ok(());
+            }
+
+            if node.name == "template" {
+                parser.insertion_mode = parser
+                    .current_template_insertion_mode()
+                    .ok_or(HtmlParseError::new("no current template insertion mode"))?;
+                return Ok(());
+            }
+
+            if node.name == "head" {
+                parser.insertion_mode = InsertionMode::InHead;
+                return Ok(());
+            }
+
+            if node.name == "body" {
+                parser.insertion_mode = InsertionMode::InBody;
+                return Ok(());
+            }
+
+            if node.name == "frameset" {
+                parser.insertion_mode = InsertionMode::InFrameset;
+                return Ok(());
+            }
+
+            if node.name == "html" {
+                if parser.head_element_pointer.is_none() {
+                    parser.insertion_mode = InsertionMode::BeforeHead;
+                } else {
+                    parser.insertion_mode = InsertionMode::AfterHead;
+                }
+                return Ok(());
+            }
+
+            if last {
+                parser.insertion_mode = InsertionMode::InBody;
+                return Ok(());
+            }
+
+            // let node be the node before node in the stack of open elements
+            let node_position = parser
+                .open_elements
+                .iter()
+                .position(|id| *id == node_id)
+                .ok_or(HtmlParseError::new(
+                    "ancestor id not found in open elements",
+                ))?;
+            let node_id =
+                parser
+                    .open_elements
+                    .get(node_position - 1)
+                    .ok_or(HtmlParseError::new(
+                        "ancestor id not found in open elements",
+                    ))?;
+
+            return step_3_loop(parser, *node_id, last);
+        }
+
+        let last = false;
+        let node_id = self.current_node_id_result()?;
+
+        step_3_loop(self, node_id, last)
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/parsing.html#generic-raw-text-element-parsing-algorithm>
+    pub(crate) fn generic_raw_text_element_parsing_algorithm(
+        &mut self,
+        token: TagToken,
+    ) -> Result<Acknowledgement, HtmlParseError> {
+        self.insert_an_html_element(token)?;
+
+        self.original_insertion_mode = Some(self.insertion_mode);
+        self.insertion_mode = InsertionMode::Text;
+
+        Ok(Acknowledgement {
+            self_closed: false,
+            tokenizer_state: Some(TokenizerState::RAWTEXT),
+        })
+    }
+
     /// <https://html.spec.whatwg.org/multipage/parsing.html#stop-parsing>
     pub(crate) fn stop_parsing(&mut self) -> Result<(), HtmlParseError> {
         // mostly scripting stuff that is unsupported by Skyscraper
+        Ok(())
+    }
+
+    fn adjusted_current_node_id(&self) -> Result<NodeId, HtmlParseError> {
+        if let Some(context_element) = self.context_element {
+            if self.open_elements.len() == 1 {
+                return Ok(context_element);
+            }
+        }
+
+        self.current_node_id_result()
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/parsing.html#generate-all-implied-end-tags-thoroughly>
+    pub(crate) fn generate_all_implied_end_tags_thoroughly(
+        &mut self,
+    ) -> Result<(), HtmlParseError> {
+        while let Some(node) = self.current_node() {
+            if let XpathItemTreeNode::ElementNode(element) = node {
+                if ![
+                    "caption", "colgroup", "dd", "dt", "li", "optgroup", "option", "p", "rb", "rp",
+                    "rt", "rtc", "tbody", "td", "tfoot", "th", "thead", "tr",
+                ]
+                .contains(&element.name.as_str())
+                {
+                    break;
+                }
+            }
+
+            self.open_elements.pop();
+        }
+
         Ok(())
     }
 }
@@ -994,7 +1242,7 @@ pub enum HtmlParserError {
     FatalError(String),
 }
 
-struct Acknowledgement {
+pub(crate) struct Acknowledgement {
     pub self_closed: bool,
     pub tokenizer_state: Option<tokenizer::TokenizerState>,
 }
@@ -1040,7 +1288,7 @@ impl Parser for HtmlParser {
             InsertionMode::InCell => todo!(),
             InsertionMode::InSelect => todo!(),
             InsertionMode::InSelectInTable => todo!(),
-            InsertionMode::InTemplate => todo!(),
+            InsertionMode::InTemplate => self.in_template_insertion_mode(token),
             InsertionMode::AfterBody => self.after_body_insertion_mode(token),
             InsertionMode::InFrameset => todo!(),
             InsertionMode::AfterFrameset => todo!(),
@@ -1058,11 +1306,18 @@ impl Parser for HtmlParser {
 
     /// <https://html.spec.whatwg.org/multipage/parsing.html#adjusted-current-node>
     fn adjusted_current_node(&self) -> Option<&XpathItemTreeNode> {
-        if self.context_element.is_some() && self.open_elements.len() == 1 {
-            self.context_element.as_ref()
-        } else {
-            self.current_node()
+        if let Some(context_element) = self.context_element {
+            if self.open_elements.len() == 1 {
+                return Some(
+                    self.arena
+                        .get(context_element)
+                        .expect("context element not in arena")
+                        .get(),
+                );
+            }
         }
+
+        self.current_node()
     }
 }
 

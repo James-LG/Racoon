@@ -154,7 +154,7 @@ impl HtmlParser {
                 todo!()
             }
             HtmlToken::EndOfFile => {
-                if !self.stack_of_template_insertion_modes.is_empty() {
+                if !self.template_insertion_modes.is_empty() {
                     self.using_the_rules_for(token, InsertionMode::InTemplate)?;
                 } else {
                     ensure_open_elements_has_valid_element(&self)?;
@@ -224,7 +224,20 @@ impl HtmlParser {
             HtmlToken::TagToken(TagTokenType::StartTag(token))
                 if ["h1", "h2", "h3", "h4", "h5", "h6"].contains(&token.tag_name.as_str()) =>
             {
-                todo!()
+                if self.has_an_element_in_button_scope("p") {
+                    self.close_a_p_element()?;
+                }
+
+                if let Some(element) = self.current_node_as_element() {
+                    if ["h1", "h2", "h3", "h4", "h5", "h6"].contains(&element.name.as_str()) {
+                        self.handle_error(HtmlParserError::MinorError(String::from(
+                            "current node is h1, h2, h3, h4, h5, or h6",
+                        )))?;
+                        self.open_elements.pop();
+                    }
+                }
+
+                self.insert_an_html_element(token)?;
             }
             HtmlToken::TagToken(TagTokenType::StartTag(token))
                 if ["pre", "listing"].contains(&token.tag_name.as_str()) =>
@@ -259,7 +272,7 @@ impl HtmlParser {
                     if element.name == "li" {
                         parser.generate_implied_end_tags(Some("li"))?;
 
-                        if parser.current_node_as_element_error()?.name != "li" {
+                        if parser.current_node_as_element_result()?.name != "li" {
                             parser.handle_error(HtmlParserError::MinorError(String::from(
                                 "current node is not li",
                             )))?;
@@ -327,7 +340,7 @@ impl HtmlParser {
 
                 self.frameset_ok = false;
 
-                let node = self.current_node_as_element_error()?.clone();
+                let node = self.current_node_as_element_result()?.clone();
                 step_3_loop(self, &node, token)?;
             }
             HtmlToken::TagToken(TagTokenType::StartTag(token))
@@ -402,7 +415,64 @@ impl HtmlParser {
                 }
             }
             HtmlToken::TagToken(TagTokenType::EndTag(token)) if token.tag_name == "form" => {
-                todo!()
+                if !self.open_elements_has_element("template") {
+                    let node = self.form_element_pointer;
+                    self.form_element_pointer = None;
+
+                    match node {
+                        Some(node) => {
+                            let element = self
+                                .arena
+                                .get(node)
+                                .expect("form element pointer is none")
+                                .get()
+                                .as_element_node()
+                                .expect("form element pointer is not an element node")
+                                .clone();
+
+                            if !self.has_an_element_in_scope(&element.name) {
+                                self.handle_error(HtmlParserError::MinorError(String::from(
+                                    "open elements has no form element in scope",
+                                )))?;
+                            } else {
+                                self.generate_implied_end_tags(None)?;
+
+                                if self.current_node_id_result()? != node {
+                                    self.handle_error(HtmlParserError::MinorError(String::from(
+                                        "current node is not the same as the form element",
+                                    )))?;
+                                }
+
+                                // remove node from open elements
+                                self.open_elements.retain(|node_id| node_id != &node);
+                            }
+                        }
+                        None => {
+                            self.handle_error(HtmlParserError::MinorError(String::from(
+                                "form element pointer is none",
+                            )))?;
+
+                            return Ok(Acknowledgement::no());
+                        }
+                    }
+                } else {
+                    if !self.has_an_element_in_scope("form") {
+                        self.handle_error(HtmlParserError::MinorError(String::from(
+                            "open elements has no form element in scope",
+                        )))?;
+                        return Ok(Acknowledgement::no());
+                    } else {
+                        self.generate_implied_end_tags(None)?;
+
+                        if self.current_node_as_element_result()?.name != "form" {
+                            self.handle_error(HtmlParserError::MinorError(String::from(
+                                "current node is not form",
+                            )))?;
+                        }
+
+                        self.pop_until_tag_name("form")?;
+                    }
+                }
             }
             HtmlToken::TagToken(TagTokenType::EndTag(token)) if token.tag_name == "p" => {
                 if !self.has_an_element_in_button_scope("p") {
@@ -440,7 +510,24 @@ impl HtmlParser {
             HtmlToken::TagToken(TagTokenType::EndTag(token))
                 if ["h1", "h2", "h3", "h4", "h5", "h6"].contains(&token.tag_name.as_str()) =>
             {
-                todo!()
+                if !self
+                    .has_an_element_in_scope_by_tag_names(vec!["h1", "h2", "h3", "h4", "h5", "h6"])
+                {
+                    self.handle_error(HtmlParserError::MinorError(String::from(
+                        "open elements has no h1, h2, h3, h4, h5, or h6 element in scope",
+                    )))?;
+
+                    return Ok(Acknowledgement::no());
+                }
+
+                self.generate_implied_end_tags(None)?;
+                if self.current_node_as_element_result()?.name != token.tag_name {
+                    self.handle_error(HtmlParserError::MinorError(String::from(
+                        "current node is not the same as the token tag name",
+                    )))?;
+                }
+
+                self.pop_until_tag_name_one_of(vec!["h1", "h2", "h3", "h4", "h5", "h6"])?;
             }
             HtmlToken::TagToken(TagTokenType::EndTag(token)) if token.tag_name == "sarcasm" => {
                 // "Take a deep breath, then act as described in the 'any other end tag' entry below." lol
@@ -483,12 +570,12 @@ impl HtmlParser {
             }
             HtmlToken::TagToken(TagTokenType::StartTag(token))
                 if [
-                    "b", "big", "code", "em", "font", "i", "s", "small", "strike", "strong", "tt",
-                    "u",
+                    "a", "b", "big", "code", "em", "font", "i", "s", "small", "strike", "strong",
+                    "tt", "u",
                 ]
                 .contains(&token.tag_name.as_str()) =>
             {
-                todo!()
+                self.adoption_agency_algorithm(&token)?;
             }
             HtmlToken::TagToken(TagTokenType::StartTag(token)) if token.tag_name == "nobr" => {
                 todo!()
@@ -580,7 +667,18 @@ impl HtmlParser {
                 todo!()
             }
             HtmlToken::TagToken(TagTokenType::StartTag(token)) if token.tag_name == "textarea" => {
-                todo!()
+                self.insert_an_html_element(token)?;
+
+                // TODO: if next token is line feed character token, ignore it
+
+                self.original_insertion_mode = Some(self.insertion_mode);
+                self.insertion_mode = InsertionMode::Text;
+                self.frameset_ok = false;
+
+                return Ok(Acknowledgement {
+                    self_closed: false,
+                    tokenizer_state: Some(TokenizerState::RCDATA),
+                });
             }
             HtmlToken::TagToken(TagTokenType::StartTag(token)) if token.tag_name == "xmp" => {
                 todo!()
@@ -651,7 +749,7 @@ impl HtmlParser {
     }
 
     fn other_end_tag(&mut self, token: &TagToken) -> Result<(), HtmlParseError> {
-        let node = self.current_node_as_element_error()?.clone();
+        let node = self.current_node_as_element_result()?.clone();
 
         self.in_body_other_end_tag_loop(0, &node, token)?;
 
@@ -674,7 +772,7 @@ impl HtmlParser {
             }
 
             // pop all nodes from the current node up to node
-            while node != self.current_node_as_element_error()? {
+            while node != self.current_node_as_element_result()? {
                 self.open_elements.pop();
             }
 
@@ -769,7 +867,7 @@ impl HtmlParser {
             }
 
             // if formatting element is not the current node
-            if formatting_element.id() != self.current_node_id()? {
+            if formatting_element.id() != self.current_node_id_result()? {
                 // parse error, but do _not_ return
                 self.handle_error(HtmlParserError::MinorError(String::from(
                     "formatting element is not the current node",
@@ -802,7 +900,7 @@ impl HtmlParser {
                 })
                 .map(|node_id| *node_id);
 
-            let current_node_id = self.current_node_id()?;
+            let current_node_id = self.current_node_id_result()?;
             let furthest_block = match furthest_block {
                 Some(node_id) => node_id,
                 None => {

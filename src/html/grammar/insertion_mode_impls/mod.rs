@@ -236,7 +236,7 @@ impl HtmlParser {
             HtmlToken::TagToken(TagTokenType::StartTag(token))
                 if ["noframes", "style"].contains(&token.tag_name.as_str()) =>
             {
-                todo!()
+                return self.generic_raw_text_element_parsing_algorithm(token);
             }
             HtmlToken::TagToken(TagTokenType::StartTag(token)) if token.tag_name == "noscript" => {
                 todo!()
@@ -268,10 +268,41 @@ impl HtmlParser {
                 anything_else(self, HtmlToken::TagToken(TagTokenType::EndTag(token)))?;
             }
             HtmlToken::TagToken(TagTokenType::StartTag(token)) if token.tag_name == "template" => {
+                self.active_formatting_elements.push(NodeOrMarker::Marker);
+                self.frameset_ok = false;
+                self.insertion_mode = InsertionMode::InTemplate;
+                self.template_insertion_modes
+                    .push(InsertionMode::InTemplate);
+
+                // TODO: shadow root mode
+                if self.adjusted_current_node_id().ok() == self.open_elements.last().map(|x| *x) {
+                    self.insert_an_html_element(token)?;
+                    return Ok(Acknowledgement::no());
+                }
+
                 todo!()
             }
             HtmlToken::TagToken(TagTokenType::EndTag(token)) if token.tag_name == "template" => {
-                todo!()
+                if !self.open_elements_has_element("template") {
+                    self.handle_error(HtmlParserError::MinorError(String::from(
+                        "unexpected template end tag",
+                    )))?;
+                    return Ok(Acknowledgement::no());
+                }
+
+                self.generate_all_implied_end_tags_thoroughly()?;
+
+                let current_node = self.current_node_as_element_result()?;
+                if current_node.name != "template" {
+                    self.handle_error(HtmlParserError::MinorError(String::from(
+                        "template end tag not found",
+                    )))?;
+                }
+
+                self.pop_until_tag_name("template")?;
+                self.clear_the_list_of_active_formatting_elements_up_to_the_last_marker()?;
+                self.template_insertion_modes.pop();
+                self.reset_the_insertion_mode_appropriately()?;
             }
             HtmlToken::TagToken(TagTokenType::StartTag(token)) if token.tag_name == "head" => {
                 todo!()
@@ -373,7 +404,7 @@ impl HtmlParser {
                 todo!()
             }
             HtmlToken::TagToken(TagTokenType::EndTag(token)) if token.tag_name == "script" => {
-                let script = self.current_node_as_element_error()?;
+                let script = self.current_node_as_element_result()?;
 
                 self.open_elements.pop().expect("open elements is empty");
 
@@ -397,6 +428,98 @@ impl HtmlParser {
         Ok(Acknowledgement::no())
     }
 
+    /// <https://html.spec.whatwg.org/multipage/parsing.html#parsing-main-intemplate>
+    pub(super) fn in_template_insertion_mode(
+        &mut self,
+        token: HtmlToken,
+    ) -> Result<Acknowledgement, HtmlParseError> {
+        match token {
+            HtmlToken::Character(_) | HtmlToken::Comment(_) | HtmlToken::DocType(_) => {
+                self.using_the_rules_for(token, InsertionMode::InBody)?;
+            }
+            HtmlToken::TagToken(TagTokenType::StartTag(token))
+                if [
+                    "base", "basefont", "bgsound", "link", "meta", "noframes", "script", "style",
+                    "template", "title",
+                ]
+                .contains(&token.tag_name.as_str()) =>
+            {
+                self.using_the_rules_for(
+                    HtmlToken::TagToken(TagTokenType::StartTag(token)),
+                    InsertionMode::InHead,
+                )?;
+            }
+            HtmlToken::TagToken(TagTokenType::EndTag(token)) if token.tag_name == "template" => {
+                self.using_the_rules_for(
+                    HtmlToken::TagToken(TagTokenType::EndTag(token)),
+                    InsertionMode::InHead,
+                )?;
+            }
+            HtmlToken::TagToken(TagTokenType::StartTag(token))
+                if ["caption", "colgroup", "tbody", "tfoot", "thead"]
+                    .contains(&token.tag_name.as_str()) =>
+            {
+                self.template_insertion_modes.pop();
+                self.template_insertion_modes.push(InsertionMode::InTable);
+                self.insertion_mode = InsertionMode::InTable;
+                self.token_emitted(HtmlToken::TagToken(TagTokenType::StartTag(token)))?;
+            }
+            HtmlToken::TagToken(TagTokenType::StartTag(token))
+                if ["col"].contains(&token.tag_name.as_str()) =>
+            {
+                self.template_insertion_modes.pop();
+                self.template_insertion_modes
+                    .push(InsertionMode::InColumnGroup);
+                self.insertion_mode = InsertionMode::InColumnGroup;
+                self.token_emitted(HtmlToken::TagToken(TagTokenType::StartTag(token)))?;
+            }
+            HtmlToken::TagToken(TagTokenType::StartTag(token))
+                if ["tr"].contains(&token.tag_name.as_str()) =>
+            {
+                self.template_insertion_modes.pop();
+                self.template_insertion_modes
+                    .push(InsertionMode::InTableBody);
+                self.insertion_mode = InsertionMode::InTableBody;
+                self.token_emitted(HtmlToken::TagToken(TagTokenType::StartTag(token)))?;
+            }
+            HtmlToken::TagToken(TagTokenType::StartTag(token))
+                if ["td", "th"].contains(&token.tag_name.as_str()) =>
+            {
+                self.template_insertion_modes.pop();
+                self.template_insertion_modes.push(InsertionMode::InRow);
+                self.insertion_mode = InsertionMode::InRow;
+                self.token_emitted(HtmlToken::TagToken(TagTokenType::StartTag(token)))?;
+            }
+            HtmlToken::TagToken(TagTokenType::StartTag(token)) => {
+                self.template_insertion_modes.pop();
+                self.template_insertion_modes.push(InsertionMode::InBody);
+                self.insertion_mode = InsertionMode::InBody;
+                self.token_emitted(HtmlToken::TagToken(TagTokenType::StartTag(token)))?;
+            }
+            HtmlToken::TagToken(TagTokenType::EndTag(token)) => {
+                self.handle_error(HtmlParserError::MinorError(String::from(
+                    "unexpected end tag",
+                )))?;
+            }
+            HtmlToken::EndOfFile => {
+                if self.open_elements_has_element("template") {
+                    self.stop_parsing()?;
+                    return Ok(Acknowledgement::no());
+                }
+
+                self.handle_error(HtmlParserError::MinorError(String::from(
+                    "unexpected end of file",
+                )))?;
+                self.pop_until_tag_name("template")?;
+                self.clear_the_list_of_active_formatting_elements_up_to_the_last_marker()?;
+                self.template_insertion_modes.pop();
+                self.reset_the_insertion_mode_appropriately()?;
+                self.token_emitted(token)?;
+            }
+        }
+
+        Ok(Acknowledgement::no())
+    }
     /// <https://html.spec.whatwg.org/multipage/parsing.html#parsing-main-afterbody>
     pub(super) fn after_body_insertion_mode(
         &mut self,
