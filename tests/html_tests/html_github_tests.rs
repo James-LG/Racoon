@@ -2,64 +2,88 @@ use skyscraper::html::{self, grammar::document_builder::DocumentBuilder};
 
 use crate::test_framework;
 
+static HTML: &'static str = include_str!("../samples/James-LG_Skyscraper.html");
+
 #[test]
-fn text_should_unescape_characters() {
+fn parse_should_return_document() {
     // arrange
-    let text = r##"<div>&amp;&quot;&#39;&lt;&gt;&#96;</div>"##;
+    let text: String = HTML.parse().unwrap();
 
     // act
-    let document = html::parse(text).unwrap();
+    let document = html::parse(&text).unwrap();
 
     // assert
     let expected = DocumentBuilder::new()
-        .with_root("html", |html| {
-            html.add_element("head", |head| head)
-                .add_element("body", |body| {
-                    body.add_element("div", |div| div.add_text(r##"&"'<>`"##))
+        .add_comment(" saved from url=(0038)https://github.com/James-LG/Skyscraper ")
+        .add_element("html", |html| {
+            html.add_attributes_str(vec![
+                ("lang", "en"),
+                ("data-color-mode", "dark"),
+                ("data-light-theme", "light"),
+                ("data-dark-theme", "dark"),
+            ])
+            .add_element("head", |head| {
+                head.add_element("meta", |meta| {
+                    meta.add_attributes_str(vec![
+                        ("http-equiv", "Content-Type"),
+                        ("content", "text/html; charset=UTF-8"),
+                    ])
                 })
+                .add_element("link", |link| {
+                    link.add_attributes_str(vec![
+                        ("rel", "dns-prefetch"),
+                        ("href", "https://github.githubassets.com/"),
+                    ])
+                })
+                .add_element("link", |link| {
+                    link.add_attributes_str(vec![
+                        ("rel", "dns-prefetch"),
+                        ("href", "https://avatars.githubusercontent.com/"),
+                    ])
+                })
+                .add_element("link", |link| {
+                    link.add_attributes_str(vec![
+                        ("rel", "dns-prefetch"),
+                        ("href", "https://github-cloud.s3.amazonaws.com/"),
+                    ])
+                })
+                .add_element("link", |link| {
+                    link.add_attributes_str(vec![
+                        ("rel", "dns-prefetch"),
+                        ("href", "https://user-images.githubusercontent.com/"),
+                    ])
+                })
+                .add_element("link", |link| {
+                    link.add_attributes_str(vec![
+                        ("rel", "preconnect"),
+                        ("href", "https://github.githubassets.com/"),
+                        ("crossorigin", ""),
+                    ])
+                })
+                .add_element("link", |link| {
+                    link.add_attributes_str(vec![
+                        ("rel", "preconnect"),
+                        ("href", "https://avatars.githubusercontent.com/"),
+                    ])
+                })
+            })
+            .add_element("body", |body| {
+                body.add_element("div", |div| {
+                    {
+                        div.add_element("p", |p| p.add_text("1"))
+                            .add_element("p", |p| p.add_text("2"))
+                            .add_element("p", |p| p.add_text("3"))
+                    }
+                    .add_element("div", |div| {
+                        div.add_element("p", |p| p.add_text("4"))
+                            .add_element("p", |p| p.add_text("5"))
+                            .add_element("p", |p| p.add_text("6"))
+                    })
+                })
+            })
         })
         .build()
         .unwrap();
 
     assert!(test_framework::compare_documents(expected, document, true));
 }
-
-#[test]
-fn doctype_should_handle_regular_doctype() {
-    // arrange
-    let text = r##"
-        <!DOCTYPE html>
-        <div>hi</div>"##;
-
-    // act
-    let document = html::parse(text).unwrap();
-
-    // assert
-    let expected = DocumentBuilder::new()
-        .with_root("html", |html| {
-            html.add_element("head", |head| head)
-                .add_element("body", |body| {
-                    body.add_element("div", |div| div.add_text("hi"))
-                })
-        })
-        .build()
-        .unwrap();
-
-    assert!(test_framework::compare_documents(expected, document, true));
-}
-
-// #[test]
-// fn doctype_should_skip_verbose_doctype() {
-//     // arrange
-//     let text = r##"
-//         <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
-//         <div>hi</div>"##;
-
-//     // act
-//     let document = html::parse(text).unwrap();
-
-//     // assert
-//     let root_node = document.root_node;
-//     let html_tag = document.get_html_node(&root_node).unwrap().extract_as_tag();
-//     assert_eq!(html_tag.name, "div");
-// }

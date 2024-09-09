@@ -26,7 +26,7 @@ fn parse_should_return_document() {
 
     // assert
     let expected = DocumentBuilder::new()
-        .with_root("html", |html| {
+        .add_element("html", |html| {
             html.add_element("head", |head| head)
                 .add_element("body", |body| {
                     body.add_element("div", |div| {
@@ -64,7 +64,7 @@ fn text_should_include_text_before_between_and_after_child_element() {
 
     // assert
     let expected = DocumentBuilder::new()
-        .with_root("html", |html| {
+        .add_element("html", |html| {
             html.add_element("head", |head| head)
                 .add_element("body", |body| {
                     body.add_element("div", |div| {
@@ -90,7 +90,7 @@ fn sample1_should_parse() {
 
     // assert
     let expected = DocumentBuilder::new()
-        .with_root("html", |html| {
+        .add_element("html", |html| {
             html.add_element("head", |head| head)
                 .add_element("body", |body| {
                     body.add_element("div", |div| {
@@ -116,7 +116,7 @@ fn sample2_should_parse() {
 
     // assert
     let expected = DocumentBuilder::new()
-        .with_root("html", |html| {
+        .add_element("html", |html| {
             html.add_element("head", |head| head)
                 .add_element("body", |body| body)
                 .add_attribute_str("id", "foo")
@@ -127,4 +127,98 @@ fn sample2_should_parse() {
         .unwrap();
 
     assert!(test_framework::compare_documents(expected, document, false));
+}
+
+#[test]
+fn comment_should_parse() {
+    // arrange
+    let text = r###"
+        <html>
+            <!-- comment -->
+        </html>"###;
+
+    // act
+    let document = html::parse(text).unwrap();
+
+    // assert
+    let expected = DocumentBuilder::new()
+        .add_element("html", |html| {
+            html.add_comment(" comment ")
+                .add_element("head", |head| head)
+                .add_element("body", |body| body)
+        })
+        .build()
+        .unwrap();
+
+    assert!(test_framework::compare_documents(expected, document, false));
+}
+
+#[test]
+fn text_should_unescape_characters() {
+    // arrange
+    let text = r##"<div>&amp;&quot;&#39;&lt;&gt;&#96;</div>"##;
+
+    // act
+    let document = html::parse(text).unwrap();
+
+    // assert
+    let expected = DocumentBuilder::new()
+        .add_element("html", |html| {
+            html.add_element("head", |head| head)
+                .add_element("body", |body| {
+                    body.add_element("div", |div| div.add_text(r##"&"'<>`"##))
+                })
+        })
+        .build()
+        .unwrap();
+
+    assert!(test_framework::compare_documents(expected, document, true));
+}
+
+#[test]
+fn doctype_should_handle_regular_doctype() {
+    // arrange
+    let text = r##"
+        <!DOCTYPE html>
+        <div>hi</div>"##;
+
+    // act
+    let document = html::parse(text).unwrap();
+
+    // assert
+    let expected = DocumentBuilder::new()
+        .add_element("html", |html| {
+            html.add_element("head", |head| head)
+                .add_element("body", |body| {
+                    body.add_element("div", |div| div.add_text("hi"))
+                })
+        })
+        .build()
+        .unwrap();
+
+    assert!(test_framework::compare_documents(expected, document, true));
+}
+
+#[test]
+fn doctype_should_skip_verbose_doctype() {
+    // arrange
+    let text = r##"
+        <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+        <div>hi</div>"##;
+
+    // act
+    let document = html::parse(text).unwrap();
+
+    // assert
+    let expected = DocumentBuilder::new()
+        .add_element("html", |html| {
+            html.add_element("head", |head| head)
+                .add_element("body", |body| {
+                    body.add_element("div", |div| div.add_text("hi"))
+                })
+        })
+        .build()
+        .unwrap();
+
+    assert!(test_framework::compare_documents(expected, document, true));
 }

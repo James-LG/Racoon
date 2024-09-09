@@ -351,15 +351,11 @@ impl HtmlParser {
     }
 
     pub(crate) fn new_node(&mut self, node: XpathItemTreeNode) -> NodeId {
-        println!("new node: {:?}", node);
         let id = self.arena.new_node(node);
 
         let node: &mut XpathItemTreeNode = self.arena.get_mut(id).unwrap().get_mut();
 
         if let XpathItemTreeNode::ElementNode(element) = node {
-            if element.name == "html" {
-                println!("insterting html node");
-            }
             element.set_id(id);
         } else if let XpathItemTreeNode::AttributeNode(attribute) = node {
             attribute.set_id(id);
@@ -387,7 +383,7 @@ impl HtmlParser {
     pub(crate) fn handle_error(&self, error: HtmlParserError) -> Result<(), HtmlParseError> {
         match error {
             HtmlParserError::MinorError(err) => {
-                println!("minor error: {}", err);
+                dbg!(err);
                 Ok(())
             }
             HtmlParserError::FatalError(err) => Err(HtmlParseError::new(&err)),
@@ -446,10 +442,6 @@ impl HtmlParser {
         &mut self,
         result: CreateAnElementForTheTokenResult,
     ) -> Result<NodeId, HtmlParseError> {
-        println!(
-            "inserting element: {:?} with attributes {:?}",
-            result.element, result.attributes
-        );
         // add the element to the arena
         let element_id = self.new_node(XpathItemTreeNode::ElementNode(result.element));
 
@@ -481,10 +473,7 @@ impl HtmlParser {
         comment: CommentToken,
         parent_override: Option<NodeId>,
     ) -> Result<(), HtmlParseError> {
-        let comment_node = XpathItemTreeNode::CommentNode(CommentNode {
-            content: comment.data,
-        });
-        let comment_id = self.new_node(comment_node);
+        let comment_id = CommentNode::create(comment.data, &mut self.arena);
 
         let adjusted_insertion_location = if let Some(parent) = parent_override {
             parent
@@ -505,7 +494,6 @@ impl HtmlParser {
         let target = if let Some(override_target) = override_target {
             override_target
         } else {
-            println!("open elements: {:?}", self.open_elements.len());
             self.open_elements
                 .last()
                 .cloned()

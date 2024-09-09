@@ -124,10 +124,10 @@ impl NameTest {
             NameTest::Name(expected_name) => {
                 // Get the name of the node, if available for the node type.
                 let node_name = match node {
-                    XpathItemTreeNode::DocumentNode(_) => todo!(),
+                    XpathItemTreeNode::DocumentNode(_) => None,
                     XpathItemTreeNode::ElementNode(e) => Some(&e.name),
-                    XpathItemTreeNode::PINode(_) => todo!(),
-                    XpathItemTreeNode::CommentNode(_) => todo!(),
+                    XpathItemTreeNode::PINode(_) => None,
+                    XpathItemTreeNode::CommentNode(_) => None,
                     XpathItemTreeNode::TextNode(_) => None, // Text nodes do not have a name.
                     XpathItemTreeNode::AttributeNode(a) => Some(&a.name),
                 };

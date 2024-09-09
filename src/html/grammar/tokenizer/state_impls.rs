@@ -1265,7 +1265,7 @@ impl<'a> Tokenizer<'a> {
                 self.emit_current_comment_token()?;
             }
             _ => {
-                self.reconsume_in_state(TokenizerState::BogusComment)?;
+                self.reconsume_in_state(TokenizerState::Comment)?;
             }
         }
 
@@ -1625,6 +1625,7 @@ impl<'a> Tokenizer<'a> {
                 self.emit(HtmlToken::EndOfFile)?;
             }
             Some(_) => {
+                self.input_stream.prev(); // rewind to the last character
                 let next_six_chars = self
                     .input_stream
                     .peek_current_and_multiple(6)
@@ -1647,6 +1648,471 @@ impl<'a> Tokenizer<'a> {
 
                 self.current_doctype_token_mut()?.force_quirks = true;
                 self.reconsume_in_state(TokenizerState::BogusDOCTYPE)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/parsing.html#after-doctype-public-keyword-state>
+    pub(super) fn after_doctype_public_keyword_state(&mut self) -> Result<(), HtmlParseError> {
+        match self.input_stream.next() {
+            Some(&chars::CHARACTER_TABULATION)
+            | Some(&chars::LINE_FEED)
+            | Some(&chars::FORM_FEED)
+            | Some(&chars::SPACE) => {
+                self.state = TokenizerState::BeforeDOCTYPEPublicIdentifier;
+            }
+            Some('"') => {
+                self.handle_error(TokenizerError::MissingWhitespaceAfterDoctypePublicKeyword)?;
+
+                self.current_doctype_token_mut()?.public_identifier = Some(String::new());
+                self.state = TokenizerState::DOCTYPEPublicIdentifierDoubleQuoted;
+            }
+            Some('\'') => {
+                self.handle_error(TokenizerError::MissingWhitespaceAfterDoctypePublicKeyword)?;
+
+                self.current_doctype_token_mut()?.public_identifier = Some(String::new());
+                self.state = TokenizerState::DOCTYPEPublicIdentifierSingleQuoted;
+            }
+            Some('>') => {
+                self.handle_error(TokenizerError::MissingDoctypePublicIdentifier)?;
+
+                self.current_doctype_token_mut()?.force_quirks = true;
+                self.emit_current_doctype_token()?;
+                self.state = TokenizerState::Data;
+            }
+            None => {
+                self.handle_error(TokenizerError::EofInDoctype)?;
+
+                self.current_doctype_token_mut()?.force_quirks = true;
+                self.emit_current_doctype_token()?;
+                self.emit(HtmlToken::EndOfFile)?;
+            }
+            _ => {
+                self.handle_error(TokenizerError::MissingQuoteBeforeDoctypePublicIdentifier)?;
+
+                self.current_doctype_token_mut()?.force_quirks = true;
+                self.reconsume_in_state(TokenizerState::BogusDOCTYPE)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/parsing.html#before-doctype-public-identifier-state>
+    pub(super) fn before_doctype_public_identifier_state(&mut self) -> Result<(), HtmlParseError> {
+        match self.input_stream.next() {
+            Some(&chars::CHARACTER_TABULATION)
+            | Some(&chars::LINE_FEED)
+            | Some(&chars::FORM_FEED)
+            | Some(&chars::SPACE) => {
+                // ignore
+            }
+            Some('"') => {
+                self.current_doctype_token_mut()?.public_identifier = Some(String::new());
+                self.state = TokenizerState::DOCTYPEPublicIdentifierDoubleQuoted;
+            }
+            Some('\'') => {
+                self.current_doctype_token_mut()?.public_identifier = Some(String::new());
+                self.state = TokenizerState::DOCTYPEPublicIdentifierSingleQuoted;
+            }
+            Some('>') => {
+                self.handle_error(TokenizerError::MissingDoctypePublicIdentifier)?;
+
+                self.current_doctype_token_mut()?.force_quirks = true;
+                self.emit_current_doctype_token()?;
+                self.state = TokenizerState::Data;
+            }
+            None => {
+                self.handle_error(TokenizerError::EofInDoctype)?;
+
+                self.current_doctype_token_mut()?.force_quirks = true;
+                self.emit_current_doctype_token()?;
+                self.emit(HtmlToken::EndOfFile)?;
+            }
+            _ => {
+                self.handle_error(TokenizerError::MissingQuoteBeforeDoctypePublicIdentifier)?;
+
+                self.current_doctype_token_mut()?.force_quirks = true;
+                self.reconsume_in_state(TokenizerState::BogusDOCTYPE)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/parsing.html#doctype-public-identifier-(double-quoted)-state>
+    pub(super) fn doctype_public_identifier_double_quoted_state(
+        &mut self,
+    ) -> Result<(), HtmlParseError> {
+        match self.input_stream.next() {
+            Some('"') => {
+                self.state = TokenizerState::AfterDOCTYPEPublicIdentifier;
+            }
+            Some(&chars::NULL) => {
+                self.handle_error(TokenizerError::UnexpectedNullCharacter)?;
+
+                self.current_doctype_token_mut()?
+                    .public_identifier
+                    .as_mut()
+                    .unwrap()
+                    .push(chars::FEED_REPLACEMENT_CHARACTER);
+            }
+            None => {
+                self.handle_error(TokenizerError::EofInDoctype)?;
+
+                self.current_doctype_token_mut()?.force_quirks = true;
+                self.emit_current_doctype_token()?;
+                self.emit(HtmlToken::EndOfFile)?;
+            }
+            Some(c) => {
+                let c = *c;
+                self.current_doctype_token_mut()?
+                    .public_identifier
+                    .as_mut()
+                    .unwrap()
+                    .push(c);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/parsing.html#doctype-public-identifier-(single-quoted)-state>
+    pub(super) fn doctype_public_identifier_single_quoted_state(
+        &mut self,
+    ) -> Result<(), HtmlParseError> {
+        match self.input_stream.next() {
+            Some('\'') => {
+                self.state = TokenizerState::AfterDOCTYPEPublicIdentifier;
+            }
+            Some(&chars::NULL) => {
+                self.handle_error(TokenizerError::UnexpectedNullCharacter)?;
+
+                self.current_doctype_token_mut()?
+                    .public_identifier
+                    .as_mut()
+                    .unwrap()
+                    .push(chars::FEED_REPLACEMENT_CHARACTER);
+            }
+            None => {
+                self.handle_error(TokenizerError::EofInDoctype)?;
+
+                self.current_doctype_token_mut()?.force_quirks = true;
+                self.emit_current_doctype_token()?;
+                self.emit(HtmlToken::EndOfFile)?;
+            }
+            Some(c) => {
+                let c = *c;
+                self.current_doctype_token_mut()?
+                    .public_identifier
+                    .as_mut()
+                    .unwrap()
+                    .push(c);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/parsing.html#after-doctype-public-identifier-state>
+    pub(super) fn after_doctype_public_identifier_state(&mut self) -> Result<(), HtmlParseError> {
+        match self.input_stream.next() {
+            Some(&chars::CHARACTER_TABULATION)
+            | Some(&chars::LINE_FEED)
+            | Some(&chars::FORM_FEED)
+            | Some(&chars::SPACE) => {
+                self.state = TokenizerState::BetweenDOCTYPEPublicAndSystemIdentifiers;
+            }
+            Some('>') => {
+                self.emit_current_doctype_token()?;
+                self.state = TokenizerState::Data;
+            }
+            Some('"') => {
+                self.handle_error(
+                    TokenizerError::MissingWhitespaceBetweenDoctypePublicAndSystemIdentifiers,
+                )?;
+
+                self.current_doctype_token_mut()?.system_identifier = Some(String::new());
+                self.state = TokenizerState::DOCTYPESystemIdentifierDoubleQuoted;
+            }
+            Some('\'') => {
+                self.handle_error(
+                    TokenizerError::MissingWhitespaceBetweenDoctypePublicAndSystemIdentifiers,
+                )?;
+
+                self.current_doctype_token_mut()?.system_identifier = Some(String::new());
+                self.state = TokenizerState::DOCTYPESystemIdentifierSingleQuoted;
+            }
+            None => {
+                self.handle_error(TokenizerError::EofInDoctype)?;
+
+                self.current_doctype_token_mut()?.force_quirks = true;
+                self.emit_current_doctype_token()?;
+                self.emit(HtmlToken::EndOfFile)?;
+            }
+            _ => {
+                self.handle_error(TokenizerError::MissingQuoteBeforeDoctypeSystemIdentifier)?;
+
+                self.current_doctype_token_mut()?.force_quirks = true;
+                self.reconsume_in_state(TokenizerState::BogusDOCTYPE)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/parsing.html#between-doctype-public-and-system-identifiers-state>
+    pub(super) fn between_doctype_public_and_system_identifiers_state(
+        &mut self,
+    ) -> Result<(), HtmlParseError> {
+        match self.input_stream.next() {
+            Some(&chars::CHARACTER_TABULATION)
+            | Some(&chars::LINE_FEED)
+            | Some(&chars::FORM_FEED)
+            | Some(&chars::SPACE) => {
+                // ignore
+            }
+            Some('>') => {
+                self.emit_current_doctype_token()?;
+                self.state = TokenizerState::Data;
+            }
+            Some('"') => {
+                self.current_doctype_token_mut()?.system_identifier = Some(String::new());
+                self.state = TokenizerState::DOCTYPESystemIdentifierDoubleQuoted;
+            }
+            Some('\'') => {
+                self.current_doctype_token_mut()?.system_identifier = Some(String::new());
+                self.state = TokenizerState::DOCTYPESystemIdentifierSingleQuoted;
+            }
+            None => {
+                self.handle_error(TokenizerError::EofInDoctype)?;
+
+                self.current_doctype_token_mut()?.force_quirks = true;
+                self.emit_current_doctype_token()?;
+                self.emit(HtmlToken::EndOfFile)?;
+            }
+            _ => {
+                self.handle_error(TokenizerError::MissingQuoteBeforeDoctypeSystemIdentifier)?;
+
+                self.current_doctype_token_mut()?.force_quirks = true;
+                self.reconsume_in_state(TokenizerState::BogusDOCTYPE)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/parsing.html#after-doctype-system-keyword-state>
+    pub(super) fn after_doctype_system_keyword_state(&mut self) -> Result<(), HtmlParseError> {
+        match self.input_stream.next() {
+            Some(&chars::CHARACTER_TABULATION)
+            | Some(&chars::LINE_FEED)
+            | Some(&chars::FORM_FEED)
+            | Some(&chars::SPACE) => {
+                self.state = TokenizerState::BeforeDOCTYPESystemIdentifier;
+            }
+            Some('"') => {
+                self.handle_error(TokenizerError::MissingWhitespaceAfterDoctypeSystemKeyword)?;
+
+                self.current_doctype_token_mut()?.system_identifier = Some(String::new());
+                self.state = TokenizerState::DOCTYPESystemIdentifierDoubleQuoted;
+            }
+            Some('\'') => {
+                self.handle_error(TokenizerError::MissingWhitespaceAfterDoctypeSystemKeyword)?;
+
+                self.current_doctype_token_mut()?.system_identifier = Some(String::new());
+                self.state = TokenizerState::DOCTYPESystemIdentifierSingleQuoted;
+            }
+            Some('>') => {
+                self.handle_error(TokenizerError::MissingDoctypeSystemIdentifier)?;
+
+                self.current_doctype_token_mut()?.force_quirks = true;
+                self.emit_current_doctype_token()?;
+                self.state = TokenizerState::Data;
+            }
+            None => {
+                self.handle_error(TokenizerError::EofInDoctype)?;
+
+                self.current_doctype_token_mut()?.force_quirks = true;
+                self.emit_current_doctype_token()?;
+                self.emit(HtmlToken::EndOfFile)?;
+            }
+            _ => {
+                self.handle_error(TokenizerError::MissingQuoteBeforeDoctypeSystemIdentifier)?;
+
+                self.current_doctype_token_mut()?.force_quirks = true;
+                self.reconsume_in_state(TokenizerState::BogusDOCTYPE)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/parsing.html#before-doctype-system-identifier-state>
+    pub(super) fn before_doctype_system_identifier_state(&mut self) -> Result<(), HtmlParseError> {
+        match self.input_stream.next() {
+            Some(&chars::CHARACTER_TABULATION)
+            | Some(&chars::LINE_FEED)
+            | Some(&chars::FORM_FEED)
+            | Some(&chars::SPACE) => {
+                // ignore
+            }
+            Some('"') => {
+                self.current_doctype_token_mut()?.system_identifier = Some(String::new());
+                self.state = TokenizerState::DOCTYPESystemIdentifierDoubleQuoted;
+            }
+            Some('\'') => {
+                self.current_doctype_token_mut()?.system_identifier = Some(String::new());
+                self.state = TokenizerState::DOCTYPESystemIdentifierSingleQuoted;
+            }
+            Some('>') => {
+                self.handle_error(TokenizerError::MissingDoctypeSystemIdentifier)?;
+
+                self.current_doctype_token_mut()?.force_quirks = true;
+                self.emit_current_doctype_token()?;
+                self.state = TokenizerState::Data;
+            }
+            None => {
+                self.handle_error(TokenizerError::EofInDoctype)?;
+
+                self.current_doctype_token_mut()?.force_quirks = true;
+                self.emit_current_doctype_token()?;
+                self.emit(HtmlToken::EndOfFile)?;
+            }
+            _ => {
+                self.handle_error(TokenizerError::MissingQuoteBeforeDoctypeSystemIdentifier)?;
+
+                self.current_doctype_token_mut()?.force_quirks = true;
+                self.reconsume_in_state(TokenizerState::BogusDOCTYPE)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/parsing.html#doctype-system-identifier-(double-quoted)-state>
+    pub(super) fn doctype_system_identifier_double_quoted_state(
+        &mut self,
+    ) -> Result<(), HtmlParseError> {
+        match self.input_stream.next() {
+            Some('"') => {
+                self.state = TokenizerState::AfterDOCTYPESystemIdentifier;
+            }
+            Some(&chars::NULL) => {
+                self.handle_error(TokenizerError::UnexpectedNullCharacter)?;
+
+                self.current_doctype_token_mut()?
+                    .system_identifier
+                    .as_mut()
+                    .unwrap()
+                    .push(chars::FEED_REPLACEMENT_CHARACTER);
+            }
+            None => {
+                self.handle_error(TokenizerError::EofInDoctype)?;
+
+                self.current_doctype_token_mut()?.force_quirks = true;
+                self.emit_current_doctype_token()?;
+                self.emit(HtmlToken::EndOfFile)?;
+            }
+            Some(c) => {
+                let c = *c;
+                self.current_doctype_token_mut()?
+                    .system_identifier
+                    .as_mut()
+                    .unwrap()
+                    .push(c);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/parsing.html#doctype-system-identifier-(single-quoted)-state>
+    pub(super) fn doctype_system_identifier_single_quoted_state(
+        &mut self,
+    ) -> Result<(), HtmlParseError> {
+        match self.input_stream.next() {
+            Some('\'') => {
+                self.state = TokenizerState::AfterDOCTYPESystemIdentifier;
+            }
+            Some(&chars::NULL) => {
+                self.handle_error(TokenizerError::UnexpectedNullCharacter)?;
+
+                self.current_doctype_token_mut()?
+                    .system_identifier
+                    .as_mut()
+                    .unwrap()
+                    .push(chars::FEED_REPLACEMENT_CHARACTER);
+            }
+            None => {
+                self.handle_error(TokenizerError::EofInDoctype)?;
+
+                self.current_doctype_token_mut()?.force_quirks = true;
+                self.emit_current_doctype_token()?;
+                self.emit(HtmlToken::EndOfFile)?;
+            }
+            Some(c) => {
+                let c = *c;
+                self.current_doctype_token_mut()?
+                    .system_identifier
+                    .as_mut()
+                    .unwrap()
+                    .push(c);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/parsing.html#after-doctype-system-identifier-state>
+    pub(super) fn after_doctype_system_identifier_state(&mut self) -> Result<(), HtmlParseError> {
+        match self.input_stream.next() {
+            Some(&chars::CHARACTER_TABULATION)
+            | Some(&chars::LINE_FEED)
+            | Some(&chars::FORM_FEED)
+            | Some(&chars::SPACE) => {
+                // ignore
+            }
+            Some('>') => {
+                self.emit_current_doctype_token()?;
+                self.state = TokenizerState::Data;
+            }
+            None => {
+                self.handle_error(TokenizerError::EofInDoctype)?;
+
+                self.current_doctype_token_mut()?.force_quirks = true;
+                self.emit_current_doctype_token()?;
+                self.emit(HtmlToken::EndOfFile)?;
+            }
+            _ => {
+                self.handle_error(TokenizerError::UnexpectedCharacterAfterDoctypeSystemIdentifier)?;
+
+                self.current_doctype_token_mut()?.force_quirks = true;
+                self.reconsume_in_state(TokenizerState::BogusDOCTYPE)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/parsing.html#bogus-doctype-state>
+    pub(super) fn bogus_doctype_state(&mut self) -> Result<(), HtmlParseError> {
+        match self.input_stream.next() {
+            Some('>') => {
+                self.emit_current_doctype_token()?;
+                self.state = TokenizerState::Data;
+            }
+            Some(&chars::NULL) => {
+                self.handle_error(TokenizerError::UnexpectedNullCharacter)?;
+            }
+            None => {
+                self.emit_current_doctype_token()?;
+                self.emit(HtmlToken::EndOfFile)?;
+            }
+            _ => {
+                // ignore
             }
         }
 

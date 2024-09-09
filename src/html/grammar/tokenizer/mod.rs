@@ -26,6 +26,8 @@ pub enum HtmlToken {
 pub struct DoctypeToken {
     pub name: String,
     pub force_quirks: bool,
+    pub public_identifier: Option<String>,
+    pub system_identifier: Option<String>,
 }
 
 impl DoctypeToken {
@@ -33,6 +35,8 @@ impl DoctypeToken {
         DoctypeToken {
             name,
             force_quirks: false,
+            public_identifier: None,
+            system_identifier: None,
         }
     }
 }
@@ -275,6 +279,22 @@ pub(crate) enum TokenizerError {
     IncorrectlyClosedComment,
     #[error("eof in script html comment like text")]
     EofInScriptHtmlCommentLikeText,
+    #[error("missing whitespace after doctype public keyword")]
+    MissingWhitespaceAfterDoctypePublicKeyword,
+    #[error("missing doctype public identifier")]
+    MissingDoctypePublicIdentifier,
+    #[error("missing quote before doctype public identifier")]
+    MissingQuoteBeforeDoctypePublicIdentifier,
+    #[error("missing whitespace between doctype public and system identifiers")]
+    MissingWhitespaceBetweenDoctypePublicAndSystemIdentifiers,
+    #[error("missing quote before doctype system identifier")]
+    MissingQuoteBeforeDoctypeSystemIdentifier,
+    #[error("missing whitespace after doctype system keyword")]
+    MissingWhitespaceAfterDoctypeSystemKeyword,
+    #[error("missing doctype system identifier")]
+    MissingDoctypeSystemIdentifier,
+    #[error("unexpected character after doctype system identifier")]
+    UnexpectedCharacterAfterDoctypeSystemIdentifier,
 }
 
 pub(crate) trait TokenizerErrorHandler {
@@ -293,15 +313,8 @@ impl TokenizerErrorHandler for DefaultTokenizerErrorHandler {
         error: TokenizerError,
         tokenizer: &mut Tokenizer,
     ) -> Result<(), HtmlParseError> {
-        match error {
-            TokenizerError::UnexpectedNullCharacter => {
-                // In general, NULL code points are ignored.
-                Ok(())
-            }
-            _ => Err(HtmlParseError {
-                message: format!("{:?}", error),
-            }),
-        }
+        dbg!(error);
+        Ok(())
     }
 }
 
@@ -348,7 +361,6 @@ impl<'a> Tokenizer<'a> {
     }
 
     pub fn emit(&mut self, token: HtmlToken) -> Result<(), HtmlParseError> {
-        println!("emitting token: {:?}", token);
         if let HtmlToken::TagToken(TagTokenType::StartTag(tag)) = &token {
             self.last_emitted_start_tag = Some(tag.clone());
         }
@@ -619,18 +631,36 @@ impl<'a> Tokenizer<'a> {
             TokenizerState::BeforeDOCTYPEName => self.before_doctype_name(),
             TokenizerState::DOCTYPEName => self.doctype_name_state(),
             TokenizerState::AfterDOCTYPEName => self.after_doctype_name_state(),
-            TokenizerState::AfterDOCTYPEPublicKeyword => todo!(),
-            TokenizerState::BeforeDOCTYPEPublicIdentifier => todo!(),
-            TokenizerState::DOCTYPEPublicIdentifierDoubleQuoted => todo!(),
-            TokenizerState::DOCTYPEPublicIdentifierSingleQuoted => todo!(),
-            TokenizerState::AfterDOCTYPEPublicIdentifier => todo!(),
-            TokenizerState::BetweenDOCTYPEPublicAndSystemIdentifiers => todo!(),
-            TokenizerState::AfterDOCTYPESystemKeyword => todo!(),
-            TokenizerState::BeforeDOCTYPESystemIdentifier => todo!(),
-            TokenizerState::DOCTYPESystemIdentifierDoubleQuoted => todo!(),
-            TokenizerState::DOCTYPESystemIdentifierSingleQuoted => todo!(),
-            TokenizerState::AfterDOCTYPESystemIdentifier => todo!(),
-            TokenizerState::BogusDOCTYPE => todo!(),
+            TokenizerState::AfterDOCTYPEPublicKeyword => self.after_doctype_public_keyword_state(),
+            TokenizerState::BeforeDOCTYPEPublicIdentifier => {
+                self.before_doctype_public_identifier_state()
+            }
+            TokenizerState::DOCTYPEPublicIdentifierDoubleQuoted => {
+                self.doctype_public_identifier_double_quoted_state()
+            }
+            TokenizerState::DOCTYPEPublicIdentifierSingleQuoted => {
+                self.doctype_public_identifier_single_quoted_state()
+            }
+            TokenizerState::AfterDOCTYPEPublicIdentifier => {
+                self.after_doctype_public_identifier_state()
+            }
+            TokenizerState::BetweenDOCTYPEPublicAndSystemIdentifiers => {
+                self.between_doctype_public_and_system_identifiers_state()
+            }
+            TokenizerState::AfterDOCTYPESystemKeyword => self.after_doctype_system_keyword_state(),
+            TokenizerState::BeforeDOCTYPESystemIdentifier => {
+                self.before_doctype_system_identifier_state()
+            }
+            TokenizerState::DOCTYPESystemIdentifierDoubleQuoted => {
+                self.doctype_system_identifier_double_quoted_state()
+            }
+            TokenizerState::DOCTYPESystemIdentifierSingleQuoted => {
+                self.doctype_system_identifier_single_quoted_state()
+            }
+            TokenizerState::AfterDOCTYPESystemIdentifier => {
+                self.after_doctype_system_identifier_state()
+            }
+            TokenizerState::BogusDOCTYPE => self.bogus_doctype_state(),
             TokenizerState::CDATASection => todo!(),
             TokenizerState::CDATASectionBracket => todo!(),
             TokenizerState::CDATASectionEnd => todo!(),

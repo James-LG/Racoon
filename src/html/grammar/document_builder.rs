@@ -3,7 +3,9 @@ use thiserror::Error;
 
 use crate::xpath::{
     grammar::{
-        data_model::{AttributeNode, ElementNode, TextNode, XpathDocumentNode, XpathItem},
+        data_model::{
+            AttributeNode, CommentNode, ElementNode, TextNode, XpathDocumentNode, XpathItem,
+        },
         XpathItemTreeNode,
     },
     XpathItemTree,
@@ -16,38 +18,71 @@ pub struct DocumentBuilderError {
 }
 pub struct DocumentBuilder {
     arena: Arena<XpathItemTreeNode>,
-    root_func: Option<(String, Box<dyn FnOnce(ElementBuilder) -> ElementBuilder>)>,
+    funcs: Vec<
+        Box<
+            dyn FnOnce(
+                &mut Arena<XpathItemTreeNode>,
+                NodeId,
+            ) -> Result<NodeId, DocumentBuilderError>,
+        >,
+    >,
 }
 
 impl DocumentBuilder {
     pub fn new() -> Self {
         Self {
             arena: Arena::new(),
-            root_func: None,
+            funcs: Vec::new(),
         }
     }
 
-    pub fn with_root(
+    pub fn add_element(
         mut self,
         tag_name: &str,
         f: impl FnOnce(ElementBuilder) -> ElementBuilder + 'static,
     ) -> Self {
-        self.root_func = Some((tag_name.to_string(), Box::new(f)));
+        let tag_name = tag_name.to_string();
+        self.funcs.push(Box::new(move |arena, parent_id| {
+            f(ElementBuilder::new(
+                tag_name.clone(),
+                Some(parent_id),
+                arena,
+            ))
+            .build()
+        }));
+
+        self
+    }
+
+    pub fn add_comment(mut self, comment: &str) -> Self {
+        let comment = comment.to_string();
+        self.funcs.push(Box::new(move |arena, _| {
+            let child_id =
+                arena.new_node(XpathItemTreeNode::CommentNode(CommentNode::new(comment)));
+
+            arena
+                .get_mut(child_id)
+                .unwrap()
+                .get_mut()
+                .as_comment_node_mut()
+                .unwrap()
+                .set_id(child_id);
+
+            Ok(child_id)
+        }));
 
         self
     }
 
     pub fn build(mut self) -> Result<XpathItemTree, DocumentBuilderError> {
-        let (tag_name, f) = self.root_func.ok_or(DocumentBuilderError {
-            message: "DocumentBuilderError: root element is not set".to_string(),
-        })?;
-
-        let root_id = f(ElementBuilder::new(tag_name, None, &mut self.arena)).build()?;
         let document_node_id = self
             .arena
             .new_node(XpathItemTreeNode::DocumentNode(XpathDocumentNode::new()));
 
-        document_node_id.append(root_id, &mut self.arena);
+        for func in self.funcs {
+            let child_id = func(&mut self.arena, document_node_id)?;
+            document_node_id.append(child_id, &mut self.arena);
+        }
 
         let document = XpathItemTree::new(self.arena, document_node_id);
 
@@ -101,6 +136,14 @@ impl<'arena> ElementBuilder<'arena> {
         self
     }
 
+    pub fn add_attributes_str(mut self, attributes: Vec<(&str, &str)>) -> Self {
+        for (name, value) in attributes {
+            self = self.add_attribute_str(name, value);
+        }
+
+        self
+    }
+
     pub fn add_attribute_str(mut self, name: &str, value: &str) -> Self {
         self.add_attribute(AttributeNode::new(name.to_string(), value.to_string()))
     }
@@ -133,6 +176,26 @@ impl<'arena> ElementBuilder<'arena> {
                 .unwrap()
                 .get_mut()
                 .as_text_node_mut()
+                .unwrap()
+                .set_id(child_id);
+
+            Ok(child_id)
+        }));
+
+        self
+    }
+
+    pub fn add_comment(mut self, comment: &str) -> Self {
+        let comment = comment.to_string();
+        self.funcs.push(Box::new(move |arena, _| {
+            let child_id =
+                arena.new_node(XpathItemTreeNode::CommentNode(CommentNode::new(comment)));
+
+            arena
+                .get_mut(child_id)
+                .unwrap()
+                .get_mut()
+                .as_comment_node_mut()
                 .unwrap()
                 .set_id(child_id);
 

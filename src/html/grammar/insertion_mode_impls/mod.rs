@@ -150,7 +150,9 @@ impl HtmlParser {
             ) => {
                 // ignore
             }
-            HtmlToken::Comment(_) => todo!(),
+            HtmlToken::Comment(comment) => {
+                self.insert_a_comment(comment, None)?;
+            }
             HtmlToken::DocType(_) => todo!(),
             HtmlToken::TagToken(TagTokenType::StartTag(token)) if token.tag_name == "html" => {
                 todo!()

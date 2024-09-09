@@ -6,7 +6,7 @@ use enum_extract_macro::EnumExtract;
 use indextree::{Arena, NodeId};
 use ordered_float::OrderedFloat;
 
-use super::{TextIter, XpathItemTree, XpathItemTreeNode};
+use super::{DisplayFormatting, TextIter, XpathItemTree, XpathItemTreeNode};
 
 /// <https://www.w3.org/TR/xpath-datamodel-31/#dt-item>
 #[derive(PartialEq, Eq, Debug, Clone, Hash, EnumExtract)]
@@ -149,13 +149,17 @@ impl XpathDocumentNode {
             .collect()
     }
 
-    pub fn display<'tree>(&self, tree: &'tree XpathItemTree) -> String {
+    pub fn display<'tree>(
+        &self,
+        tree: &'tree XpathItemTree,
+        formatting: DisplayFormatting,
+    ) -> String {
         let children = self.children(tree);
 
         let element_strings: Vec<String> = children
             .iter()
             .filter_map(|x| x.as_element_node().ok())
-            .map(|x| x.display(tree))
+            .map(|x| x.display(tree, formatting))
             .collect();
 
         element_strings.join("\n")
@@ -390,11 +394,21 @@ impl ElementNode {
         XpathItem::Node(tree.get(self.id()))
     }
 
-    pub fn display<'tree>(&self, tree: &'tree XpathItemTree) -> String {
-        let children_without_attributes = self.children(tree).filter(|x| !x.is_attribute_node());
-        let displayed_children: Vec<String> = children_without_attributes
-            .map(|x| x.display(tree))
-            .collect();
+    pub fn display<'tree>(
+        &self,
+        tree: &'tree XpathItemTree,
+        formatting: DisplayFormatting,
+    ) -> String {
+        let displayed_children: Vec<String> = match formatting {
+            DisplayFormatting::Pretty => {
+                let children_without_attributes =
+                    self.children(tree).filter(|x| !x.is_attribute_node());
+                children_without_attributes
+                    .map(|x| x.display(tree, formatting))
+                    .collect()
+            }
+            DisplayFormatting::NoChildren => Vec::new(),
+        };
 
         let attributes = self.attributes(tree);
         let displayed_attributes: Vec<String> = attributes.iter().map(|x| x.to_string()).collect();
@@ -505,15 +519,68 @@ impl Display for PINode {
 }
 
 /// <https://www.w3.org/TR/xpath-datamodel-31/#CommentNode>
-#[derive(PartialEq, PartialOrd, Eq, Ord, Debug, Hash, Clone)]
+#[derive(PartialOrd, Eq, Ord, Debug, Hash, Clone)]
 pub struct CommentNode {
     /// The value of the comment.
     pub content: String,
+
+    /// The ID of the comment node.
+    id: Option<NodeId>,
+}
+
+impl CommentNode {
+    /// Create a new comment node.
+    pub(crate) fn new(content: String) -> Self {
+        Self { content, id: None }
+    }
+
+    pub(crate) fn create(content: String, arena: &mut Arena<XpathItemTreeNode>) -> NodeId {
+        let node_id = arena.new_node(XpathItemTreeNode::CommentNode(CommentNode::new(content)));
+
+        arena
+            .get_mut(node_id)
+            .unwrap()
+            .get_mut()
+            .as_comment_node_mut()
+            .unwrap()
+            .set_id(node_id);
+
+        node_id
+    }
+
+    /// Set the ID of the comment node.
+    pub(crate) fn set_id(&mut self, id: NodeId) {
+        self.id = Some(id);
+    }
+
+    /// Get the ID of the comment node.
+    pub(crate) fn id(&self) -> NodeId {
+        self.id.unwrap()
+    }
+
+    /// Get the parent of the comment.
+    ///
+    /// # Arguments
+    ///
+    /// * `tree` - The tree containing the comment.
+    ///
+    /// # Returns
+    ///
+    /// The parent of the comment if it exists, or `None` if it does not.
+    pub fn parent<'tree>(&self, tree: &'tree XpathItemTree) -> Option<&'tree XpathItemTreeNode> {
+        tree.get(self.id()).parent(tree)
+    }
 }
 
 impl Display for CommentNode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "<!--{}-->", self.content)
+    }
+}
+
+impl PartialEq for CommentNode {
+    fn eq(&self, other: &Self) -> bool {
+        self.content == other.content
     }
 }
 

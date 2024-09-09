@@ -1,5 +1,8 @@
 use itertools::Itertools;
-use skyscraper::xpath::{grammar::XpathItemTreeNode, XpathItemTree};
+use skyscraper::xpath::{
+    grammar::{DisplayFormatting, XpathItemTreeNode},
+    XpathItemTree,
+};
 
 pub fn compare_documents(
     expected_doc: XpathItemTree,
@@ -82,15 +85,6 @@ pub fn print_differences(
     actual_doc: &XpathItemTree,
 ) {
     println!(
-        "Expected node display:\n{}",
-        expected_node.map_or(String::new(), |n| n.display(&expected_doc))
-    );
-    println!(
-        "Actual node display:\n{}",
-        actual_node.map_or(String::new(), |n| n.display(&actual_doc))
-    );
-
-    println!(
         "---------------\nExpected document:\n{}\n---------------",
         expected_doc
     );
@@ -98,6 +92,16 @@ pub fn print_differences(
         "---------------\nActual document:\n{}\n---------------",
         actual_doc
     );
+
+    let expected_node_display = expected_node.map_or(String::new(), |n| {
+        n.display(&expected_doc, DisplayFormatting::NoChildren)
+    });
+    println!("Expected node display:\n{}", expected_node_display);
+
+    let actual_node_display = actual_node.map_or(String::new(), |n| {
+        n.display(&actual_doc, DisplayFormatting::NoChildren)
+    });
+    println!("Actual node display:\n{}", actual_node_display);
 
     println!("Expected: {:?}", expected_node);
     println!("Actual: {:?}", actual_node);
@@ -123,6 +127,10 @@ fn print_parent(name: &str, node: &XpathItemTreeNode, doc: &XpathItemTree) {
         }
         XpathItemTreeNode::AttributeNode(attribute) => {
             let parent = attribute.parent(doc);
+            println!("{} Parent: {:?}", name, parent);
+        }
+        XpathItemTreeNode::CommentNode(comment) => {
+            let parent = comment.parent(doc);
             println!("{} Parent: {:?}", name, parent);
         }
         _ => {}

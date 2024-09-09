@@ -166,16 +166,22 @@ impl XpathItemTreeNode {
         }
     }
 
-    pub fn display(&self, tree: &XpathItemTree) -> String {
+    pub fn display(&self, tree: &XpathItemTree, formatting: DisplayFormatting) -> String {
         match self {
-            XpathItemTreeNode::DocumentNode(node) => node.display(tree),
-            XpathItemTreeNode::ElementNode(node) => node.display(tree),
+            XpathItemTreeNode::DocumentNode(node) => node.display(tree, formatting),
+            XpathItemTreeNode::ElementNode(node) => node.display(tree, formatting),
             XpathItemTreeNode::PINode(node) => node.to_string(),
             XpathItemTreeNode::CommentNode(node) => node.to_string(),
             XpathItemTreeNode::TextNode(node) => node.to_string(),
             XpathItemTreeNode::AttributeNode(node) => node.to_string(),
         }
     }
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum DisplayFormatting {
+    Pretty,
+    NoChildren,
 }
 
 /// An iterator over all text contained in a element and its descendants.
@@ -271,7 +277,11 @@ impl XpathItemTree {
 
 impl Display for XpathItemTree {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.root().display(self))
+        write!(
+            f,
+            "{}",
+            self.root().display(self, DisplayFormatting::Pretty)
+        )
     }
 }
 
