@@ -248,8 +248,6 @@ impl HtmlParser {
 
                 // TODO: lots of script and template stuff
 
-                self.open_elements.push(node);
-
                 self.original_insertion_mode = Some(self.insertion_mode);
                 self.insertion_mode = InsertionMode::Text;
 

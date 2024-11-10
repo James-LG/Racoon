@@ -23,7 +23,7 @@
 			// Add the IDs of extensions you want installed when the container is created.
 			"extensions": [
 				"matklad.rust-analyzer",
-				"bungcip.better-toml",
+				"tamasfe.even-better-toml",
 				"vadimcn.vscode-lldb",
 				"mutantdino.resourcemonitor",
 				"ms-azuretools.vscode-docker"

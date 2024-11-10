@@ -37,3 +37,6 @@ itertools = "0.13.0"
 [[bench]]
 name = "benchmarks"
 harness = false
+
+[features]
+debug_prints = []

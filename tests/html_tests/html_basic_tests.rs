@@ -222,3 +222,41 @@ fn doctype_should_skip_verbose_doctype() {
 
     assert!(test_framework::compare_documents(expected, document, true));
 }
+
+#[test]
+fn script_should_close_properly() {
+    // arrange
+    let text = r###"
+        <html>
+
+        <head>
+        <script></script>
+        <script></script>
+        </head>
+
+        <body>
+        </body>
+
+        </html>
+        "###;
+
+    // act
+    let document = html::parse(text).unwrap();
+
+    // assert
+    let expected = DocumentBuilder::new()
+        .add_element("html", |html| {
+            html.add_element("head", |head| {
+                head.add_element("script", |script| script)
+                    .add_element("script", |script| script)
+            })
+            .add_element("body", |body| body)
+        })
+        .build()
+        .unwrap();
+
+    println!("{}", expected.to_string());
+    println!("{}", document.to_string());
+
+    // assert!(test_framework::compare_documents(expected, document, true));
+}

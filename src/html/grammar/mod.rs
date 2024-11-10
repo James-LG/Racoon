@@ -432,6 +432,11 @@ impl HtmlParser {
 
         // append the element to the adjusted insertion location
         if let Some(adjusted_insertion_location) = adjusted_insertion_location {
+            #[cfg(feature = "debug_prints")]
+            {
+                let element = self.arena.get(adjusted_insertion_location).unwrap().get();
+                println!("child of: {:?}", element);
+            }
             adjusted_insertion_location.append(element_id, &mut self.arena);
         }
 
@@ -443,6 +448,8 @@ impl HtmlParser {
         result: CreateAnElementForTheTokenResult,
     ) -> Result<NodeId, HtmlParseError> {
         // add the element to the arena
+        #[cfg(feature = "debug_prints")]
+        println!("inserting element: {:?}", result.element);
         let element_id = self.new_node(XpathItemTreeNode::ElementNode(result.element));
 
         // add the attributes to the element
@@ -494,6 +501,15 @@ impl HtmlParser {
         let target = if let Some(override_target) = override_target {
             override_target
         } else {
+            let open_elements: Vec<&XpathItemTreeNode> = self
+                .open_elements
+                .iter()
+                .map(|id| self.arena.get(*id).unwrap().get())
+                .collect();
+
+            #[cfg(feature = "debug_prints")]
+            println!("open elements: {:?}", open_elements);
+
             self.open_elements
                 .last()
                 .cloned()
@@ -1257,6 +1273,17 @@ impl Parser for HtmlParser {
             HtmlToken::TagToken(tag) => tag.self_closing(),
             _ => false,
         };
+
+        #[cfg(feature = "debug_prints")]
+        {
+            if let HtmlToken::TagToken(TagTokenType::StartTag(token)) = &token {
+                println!("start tag: {}", token.tag_name);
+            }
+
+            if let HtmlToken::TagToken(TagTokenType::EndTag(token)) = &token {
+                println!("end tag: {}", token.tag_name);
+            }
+        }
 
         let acknowledgement = match self.insertion_mode {
             InsertionMode::Initial => self.initial_insertion_mode(token),

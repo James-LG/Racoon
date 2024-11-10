@@ -4,57 +4,95 @@ use skyscraper::xpath::{
     XpathItemTree,
 };
 
+mod tests;
+
 pub fn compare_documents(
     expected_doc: XpathItemTree,
     actual_doc: XpathItemTree,
     ignore_whitespace: bool,
 ) -> bool {
-    let expected_root_descendants = expected_doc
-        .root()
-        .descendants(&expected_doc)
-        .filter(|node| {
-            if node.is_attribute_node() {
-                return false;
-            }
-            if ignore_whitespace {
-                if let XpathItemTreeNode::TextNode(text_node) = node {
-                    return !text_node.content.trim().is_empty();
+    let expected_root_node = expected_doc.root();
+    let actual_root_node = actual_doc.root();
+
+    compare_nodes(
+        Some(expected_root_node),
+        Some(actual_root_node),
+        &expected_doc,
+        &actual_doc,
+        ignore_whitespace,
+    )
+}
+
+fn compare_nodes(
+    expected_node: Option<&XpathItemTreeNode>,
+    actual_node: Option<&XpathItemTreeNode>,
+    expected_doc: &XpathItemTree,
+    actual_doc: &XpathItemTree,
+    ignore_whitespace: bool,
+) -> bool {
+    match (expected_node, actual_node) {
+        (
+            Some(XpathItemTreeNode::DocumentNode(expected_document)),
+            Some(XpathItemTreeNode::DocumentNode(actual_document)),
+        ) => {
+            // check children
+            let expected_children = expected_document
+                .children(&expected_doc)
+                .into_iter()
+                .filter(|node| {
+                    if node.is_attribute_node() {
+                        return false;
+                    }
+                    if ignore_whitespace {
+                        if let XpathItemTreeNode::TextNode(text_node) = node {
+                            return !text_node.content.trim().is_empty();
+                        }
+                    }
+                    true
+                });
+            let actual_children =
+                actual_document
+                    .children(&actual_doc)
+                    .into_iter()
+                    .filter(|node| {
+                        if node.is_attribute_node() {
+                            return false;
+                        }
+                        if ignore_whitespace {
+                            if let XpathItemTreeNode::TextNode(text_node) = node {
+                                return !text_node.content.trim().is_empty();
+                            }
+                        }
+                        true
+                    });
+
+            for cb in expected_children.zip_longest(actual_children) {
+                let (expected_child, actual_child) = cb.left_and_right();
+
+                if !compare_nodes(
+                    expected_child,
+                    actual_child,
+                    expected_doc,
+                    actual_doc,
+                    ignore_whitespace,
+                ) {
+                    return false;
                 }
             }
-            true
-        });
-    let actual_root_descendants = actual_doc.root().descendants(&actual_doc).filter(|node| {
-        if node.is_attribute_node() {
-            return false;
         }
-        if ignore_whitespace {
-            if let XpathItemTreeNode::TextNode(text_node) = node {
-                return !text_node.content.trim().is_empty();
-            }
-        }
-        true
-    });
-
-    for eb in expected_root_descendants.zip_longest(actual_root_descendants) {
-        let (expected_node, actual_node) = eb.left_and_right();
-
-        println!("Expected node: {:?}", expected_node);
-        println!("Actual node: {:?}", actual_node);
-
-        if let (
+        (
             Some(XpathItemTreeNode::ElementNode(expected_element)),
             Some(XpathItemTreeNode::ElementNode(actual_element)),
-        ) = (expected_node, actual_node)
-        {
+        ) => {
             // first check element names
             if expected_element.name != actual_element.name {
-                print_differences(expected_node, &expected_doc, actual_node, &actual_doc);
+                print_differences(expected_node, expected_doc, actual_node, actual_doc);
                 return false;
             }
 
             // next check attributes
-            let expected_element_attributes = expected_element.attributes(&expected_doc);
-            let actual_element_attributes = actual_element.attributes(&actual_doc);
+            let expected_element_attributes = expected_element.attributes(expected_doc);
+            let actual_element_attributes = actual_element.attributes(actual_doc);
 
             for ab in expected_element_attributes
                 .into_iter()
@@ -63,18 +101,63 @@ pub fn compare_documents(
                 let (expected_attribute, actual_attribute) = ab.left_and_right();
 
                 if expected_attribute != actual_attribute {
-                    print_differences(expected_node, &expected_doc, actual_node, &actual_doc);
+                    print_differences(expected_node, expected_doc, actual_node, actual_doc);
                     return false;
                 }
             }
-        } else {
+
+            // finally check children
+            let expected_children =
+                expected_element
+                    .children(&expected_doc)
+                    .into_iter()
+                    .filter(|node| {
+                        if node.is_attribute_node() {
+                            return false;
+                        }
+                        if ignore_whitespace {
+                            if let XpathItemTreeNode::TextNode(text_node) = node {
+                                return !text_node.content.trim().is_empty();
+                            }
+                        }
+                        true
+                    });
+            let actual_children = actual_element
+                .children(&actual_doc)
+                .into_iter()
+                .filter(|node| {
+                    if node.is_attribute_node() {
+                        return false;
+                    }
+                    if ignore_whitespace {
+                        if let XpathItemTreeNode::TextNode(text_node) = node {
+                            return !text_node.content.trim().is_empty();
+                        }
+                    }
+                    true
+                });
+
+            for cb in expected_children.zip_longest(actual_children) {
+                let (expected_child, actual_child) = cb.left_and_right();
+
+                if !compare_nodes(
+                    expected_child,
+                    actual_child,
+                    expected_doc,
+                    actual_doc,
+                    ignore_whitespace,
+                ) {
+                    return false;
+                }
+            }
+        }
+        _ => {
             if expected_node != actual_node {
-                print_differences(expected_node, &expected_doc, actual_node, &actual_doc);
+                print_differences(expected_node, expected_doc, actual_node, actual_doc);
                 return false;
             }
         }
     }
-
     true
 }
 

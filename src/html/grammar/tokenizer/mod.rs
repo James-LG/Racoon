@@ -469,6 +469,9 @@ impl<'a> Tokenizer<'a> {
 
     pub fn emit_current_tag_token(&mut self) -> Result<(), HtmlParseError> {
         if let Some(tag_token) = self.tag_token.take() {
+            #[cfg(feature = "debug_prints")]
+            println!("emitting tag token: {:?}", tag_token);
+
             self.emit(HtmlToken::TagToken(tag_token))?;
             self.tag_token = None;
         }
