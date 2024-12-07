@@ -821,7 +821,7 @@ impl HtmlParser {
         let subject = token.tag_name.clone();
 
         if let Some(XpathItemTreeNode::ElementNode(element)) = self.current_node() {
-            if element.name == "subject" {
+            if element.name == subject {
                 self.open_elements.pop();
                 return Ok(());
             }
@@ -840,7 +840,7 @@ impl HtmlParser {
                 self.active_formatting_elements_until_marker();
 
             let formatting_element =
-                match active_formatting_elements_until_marker.find(|node| node.name == "subject") {
+                match active_formatting_elements_until_marker.find(|node| node.name == subject) {
                     Some(element) => element.clone(),
                     None => {
                         drop(active_formatting_elements_until_marker);

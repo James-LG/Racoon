@@ -159,7 +159,7 @@ impl XpathDocumentNode {
         let element_strings: Vec<String> = children
             .iter()
             .filter_map(|x| x.as_element_node().ok())
-            .map(|x| x.display(tree, formatting))
+            .map(|x| x.display(tree, formatting, 0))
             .collect();
 
         element_strings.join("\n")
@@ -398,13 +398,15 @@ impl ElementNode {
         &self,
         tree: &'tree XpathItemTree,
         formatting: DisplayFormatting,
+        indent: usize,
     ) -> String {
         let displayed_children: Vec<String> = match formatting {
             DisplayFormatting::Pretty => {
                 let children_without_attributes =
                     self.children(tree).filter(|x| !x.is_attribute_node());
                 children_without_attributes
-                    .map(|x| x.display(tree, formatting))
+                    .map(|x| x.display(tree, formatting, indent + 1))
+                    .filter(|x| !x.trim().is_empty())
                     .collect()
             }
             DisplayFormatting::NoChildren => Vec::new(),
@@ -413,22 +415,36 @@ impl ElementNode {
         let attributes = self.attributes(tree);
         let displayed_attributes: Vec<String> = attributes.iter().map(|x| x.to_string()).collect();
 
+        // indent the element
+        let indentation = "  ".repeat(indent);
+
+        let mut display_string = String::new();
+
+        // display the start tag
         if displayed_attributes.is_empty() {
-            format!(
-                "<{}>\n{}\n</{}>",
-                self.name,
-                displayed_children.join("\n"),
-                self.name
-            )
+            display_string.push_str(&format!("{}<{}>", indentation, self.name,));
         } else {
-            format!(
-                "<{} {}>\n{}\n</{}>",
+            display_string.push_str(&format!(
+                "{}<{} {}>",
+                indentation,
                 self.name,
                 displayed_attributes.join(" "),
-                displayed_children.join("\n"),
-                self.name
-            )
+            ));
         }
+
+        // display the children
+        if !displayed_children.is_empty() {
+            display_string.push_str(&format!(
+                "\n{}\n{}",
+                &displayed_children.join("\n"),
+                indentation
+            ));
+        }
+
+        // display the end tag
+        display_string.push_str(&format!("</{}>", self.name));
+
+        return display_string;
     }
 }
 
@@ -638,6 +654,21 @@ impl TextNode {
     /// The parent of the text if it exists, or `None` if it does not.
     pub fn parent<'tree>(&self, tree: &'tree XpathItemTree) -> Option<&'tree XpathItemTreeNode> {
         tree.get(self.id()).parent(tree)
+    }
+
+    pub fn display(
+        &self,
+        _tree: &XpathItemTree,
+        formatting: DisplayFormatting,
+        indent: usize,
+    ) -> String {
+        let indentation = "  ".repeat(indent);
+        let string = match formatting {
+            DisplayFormatting::NoChildren => self.content.clone(),
+            DisplayFormatting::Pretty => self.content.clone().trim().to_string(),
+        };
+
+        format!("{}{}", indentation, string)
     }
 }
 

@@ -501,14 +501,16 @@ impl HtmlParser {
         let target = if let Some(override_target) = override_target {
             override_target
         } else {
-            let open_elements: Vec<&XpathItemTreeNode> = self
-                .open_elements
-                .iter()
-                .map(|id| self.arena.get(*id).unwrap().get())
-                .collect();
-
             #[cfg(feature = "debug_prints")]
-            println!("open elements: {:?}", open_elements);
+            {
+                let open_elements: Vec<&XpathItemTreeNode> = self
+                    .open_elements
+                    .iter()
+                    .map(|id| self.arena.get(*id).unwrap().get())
+                    .collect();
+
+                println!("open elements: {:?}", open_elements);
+            }
 
             self.open_elements
                 .last()
@@ -856,14 +858,7 @@ impl HtmlParser {
         token: HtmlToken,
         insertion_mode: InsertionMode,
     ) -> Result<(), HtmlParseError> {
-        let before_insertion_mode = self.insertion_mode;
-        self.insertion_mode = insertion_mode;
-        self.token_emitted(token)?;
-
-        // if the insertion mode was not changed while processing the token, then set it back to the original value
-        if self.insertion_mode == insertion_mode {
-            self.insertion_mode = before_insertion_mode;
-        }
+        self.handle_token(token, insertion_mode)?;
 
         Ok(())
     }
@@ -1236,6 +1231,65 @@ impl HtmlParser {
 
         Ok(())
     }
+
+    pub(crate) fn handle_token(
+        &mut self,
+        token: HtmlToken,
+        insertion_mode: InsertionMode,
+    ) -> Result<Acknowledgement, HtmlParseError> {
+        let self_closing = match &token {
+            HtmlToken::TagToken(tag) => tag.self_closing(),
+            _ => false,
+        };
+
+        #[cfg(feature = "debug_prints")]
+        {
+            println!(
+                "insertion mode: {:?}; token: {:?}",
+                self.insertion_mode, token
+            );
+            if let HtmlToken::TagToken(TagTokenType::StartTag(token)) = &token {
+                println!("start tag: {}", token.tag_name);
+            }
+
+            if let HtmlToken::TagToken(TagTokenType::EndTag(token)) = &token {
+                println!("end tag: {}", token.tag_name);
+            }
+        }
+
+        let acknowledgement = match insertion_mode {
+            InsertionMode::Initial => self.initial_insertion_mode(token),
+            InsertionMode::BeforeHtml => self.before_html_insertion_mode(token),
+            InsertionMode::BeforeHead => self.before_head_insertion_mode(token),
+            InsertionMode::InHead => self.in_head_insertion_mode(token),
+            InsertionMode::InHeadNoscript => todo!(),
+            InsertionMode::AfterHead => self.after_head_insertion_mode(token),
+            InsertionMode::InBody => self.in_body_insertion_mode(token),
+            InsertionMode::Text => self.text_insertion_mode(token),
+            InsertionMode::InTable => todo!(),
+            InsertionMode::InTableText => todo!(),
+            InsertionMode::InCaption => todo!(),
+            InsertionMode::InColumnGroup => todo!(),
+            InsertionMode::InTableBody => todo!(),
+            InsertionMode::InRow => todo!(),
+            InsertionMode::InCell => todo!(),
+            InsertionMode::InSelect => todo!(),
+            InsertionMode::InSelectInTable => todo!(),
+            InsertionMode::InTemplate => self.in_template_insertion_mode(token),
+            InsertionMode::AfterBody => self.after_body_insertion_mode(token),
+            InsertionMode::InFrameset => todo!(),
+            InsertionMode::AfterFrameset => todo!(),
+            InsertionMode::AfterAfterBody => self.after_after_body_insertion_mode(token),
+            InsertionMode::AfterAfterFrameset => todo!(),
+        }?;
+
+        if self_closing && !acknowledgement.self_closed {
+            self.error_handler
+                .error_emitted(HtmlParseErrorType::NonVoidHtmlElementStartTagWithTrailingSolidus)?;
+        }
+
+        Ok(acknowledgement)
+    }
 }
 
 #[derive(Debug, Error)]
@@ -1269,54 +1323,7 @@ impl Acknowledgement {
 
 impl Parser for HtmlParser {
     fn token_emitted(&mut self, token: HtmlToken) -> Result<Acknowledgement, HtmlParseError> {
-        let self_closing = match &token {
-            HtmlToken::TagToken(tag) => tag.self_closing(),
-            _ => false,
-        };
-
-        #[cfg(feature = "debug_prints")]
-        {
-            if let HtmlToken::TagToken(TagTokenType::StartTag(token)) = &token {
-                println!("start tag: {}", token.tag_name);
-            }
-
-            if let HtmlToken::TagToken(TagTokenType::EndTag(token)) = &token {
-                println!("end tag: {}", token.tag_name);
-            }
-        }
-
-        let acknowledgement = match self.insertion_mode {
-            InsertionMode::Initial => self.initial_insertion_mode(token),
-            InsertionMode::BeforeHtml => self.before_html_insertion_mode(token),
-            InsertionMode::BeforeHead => self.before_head_insertion_mode(token),
-            InsertionMode::InHead => self.in_head_insertion_mode(token),
-            InsertionMode::InHeadNoscript => todo!(),
-            InsertionMode::AfterHead => self.after_head_insertion_mode(token),
-            InsertionMode::InBody => self.in_body_insertion_mode(token),
-            InsertionMode::Text => self.text_insertion_mode(token),
-            InsertionMode::InTable => todo!(),
-            InsertionMode::InTableText => todo!(),
-            InsertionMode::InCaption => todo!(),
-            InsertionMode::InColumnGroup => todo!(),
-            InsertionMode::InTableBody => todo!(),
-            InsertionMode::InRow => todo!(),
-            InsertionMode::InCell => todo!(),
-            InsertionMode::InSelect => todo!(),
-            InsertionMode::InSelectInTable => todo!(),
-            InsertionMode::InTemplate => self.in_template_insertion_mode(token),
-            InsertionMode::AfterBody => self.after_body_insertion_mode(token),
-            InsertionMode::InFrameset => todo!(),
-            InsertionMode::AfterFrameset => todo!(),
-            InsertionMode::AfterAfterBody => self.after_after_body_insertion_mode(token),
-            InsertionMode::AfterAfterFrameset => todo!(),
-        }?;
-
-        if self_closing && !acknowledgement.self_closed {
-            self.error_handler
-                .error_emitted(HtmlParseErrorType::NonVoidHtmlElementStartTagWithTrailingSolidus)?;
-        }
-
-        Ok(acknowledgement)
+        self.handle_token(token, self.insertion_mode)
     }
 
     /// <https://html.spec.whatwg.org/multipage/parsing.html#adjusted-current-node>

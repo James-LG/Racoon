@@ -30,16 +30,14 @@ fn parse_should_return_document() {
             html.add_element("head", |head| head)
                 .add_element("body", |body| {
                     body.add_element("div", |div| {
-                        {
-                            div.add_element("p", |p| p.add_text("1"))
-                                .add_element("p", |p| p.add_text("2"))
-                                .add_element("p", |p| p.add_text("3"))
-                        }
-                        .add_element("div", |div| {
-                            div.add_element("p", |p| p.add_text("4"))
-                                .add_element("p", |p| p.add_text("5"))
-                                .add_element("p", |p| p.add_text("6"))
-                        })
+                        div.add_element("p", |p| p.add_text("1"))
+                            .add_element("p", |p| p.add_text("2"))
+                            .add_element("p", |p| p.add_text("3"))
+                    })
+                    .add_element("div", |div| {
+                        div.add_element("p", |p| p.add_text("4"))
+                            .add_element("p", |p| p.add_text("5"))
+                            .add_element("p", |p| p.add_text("6"))
                     })
                 })
         })

@@ -166,13 +166,18 @@ impl XpathItemTreeNode {
         }
     }
 
-    pub fn display(&self, tree: &XpathItemTree, formatting: DisplayFormatting) -> String {
+    pub fn display(
+        &self,
+        tree: &XpathItemTree,
+        formatting: DisplayFormatting,
+        indent: usize,
+    ) -> String {
         match self {
             XpathItemTreeNode::DocumentNode(node) => node.display(tree, formatting),
-            XpathItemTreeNode::ElementNode(node) => node.display(tree, formatting),
+            XpathItemTreeNode::ElementNode(node) => node.display(tree, formatting, indent),
             XpathItemTreeNode::PINode(node) => node.to_string(),
             XpathItemTreeNode::CommentNode(node) => node.to_string(),
-            XpathItemTreeNode::TextNode(node) => node.to_string(),
+            XpathItemTreeNode::TextNode(node) => node.display(tree, formatting, indent),
             XpathItemTreeNode::AttributeNode(node) => node.to_string(),
         }
     }
@@ -280,7 +285,7 @@ impl Display for XpathItemTree {
         write!(
             f,
             "{}",
-            self.root().display(self, DisplayFormatting::Pretty)
+            self.root().display(self, DisplayFormatting::Pretty, 0)
         )
     }
 }
