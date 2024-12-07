@@ -12,7 +12,7 @@ mod types;
 mod whitespace_recipes;
 mod xml_names;
 
-use std::iter;
+use std::{fmt::Display, iter};
 
 use enum_extract_macro::EnumExtract;
 pub(crate) use expressions::xpath;
@@ -28,7 +28,7 @@ use crate::{
 };
 
 /// Nodes that are part of the [`XpathItemTree`].
-#[derive(PartialEq, PartialOrd, Eq, Ord, Debug, Hash, EnumExtract, Clone)]
+#[derive(PartialEq, Eq, Debug, Hash, EnumExtract, Clone)]
 pub enum XpathItemTreeNode {
     /// The root node of the document.
     DocumentNode(XpathDocumentNode),
@@ -70,6 +70,24 @@ impl XpathItemTreeNode {
             XpathItemTreeNode::TextNode(_) => vec![],
             XpathItemTreeNode::AttributeNode(_) => vec![],
         }
+    }
+
+    /// Get all descendants of the element.
+    ///
+    /// # Arguments
+    ///
+    /// * `tree` - The tree containing the element.
+    ///
+    /// # Returns
+    ///
+    /// An iterator over all descendants of the element.
+    pub fn descendants<'tree>(
+        &'tree self,
+        tree: &'tree XpathItemTree,
+    ) -> impl Iterator<Item = &'tree XpathItemTreeNode> + 'tree {
+        tree.root_node
+            .descendants(&tree.arena)
+            .map(|node_id| tree.get(node_id))
     }
 
     /// Get the parent of the element.
@@ -147,6 +165,28 @@ impl XpathItemTreeNode {
             XpathItemTreeNode::AttributeNode(_) => None,
         }
     }
+
+    pub fn display(
+        &self,
+        tree: &XpathItemTree,
+        formatting: DisplayFormatting,
+        indent: usize,
+    ) -> String {
+        match self {
+            XpathItemTreeNode::DocumentNode(node) => node.display(tree, formatting),
+            XpathItemTreeNode::ElementNode(node) => node.display(tree, formatting, indent),
+            XpathItemTreeNode::PINode(node) => node.to_string(),
+            XpathItemTreeNode::CommentNode(node) => node.to_string(),
+            XpathItemTreeNode::TextNode(node) => node.display(tree, formatting, indent),
+            XpathItemTreeNode::AttributeNode(node) => node.to_string(),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum DisplayFormatting {
+    Pretty,
+    NoChildren,
 }
 
 /// An iterator over all text contained in a element and its descendants.
@@ -200,28 +240,34 @@ impl<'a> Iterator for TextIter<'a> {
 /// let document = html::parse(text).unwrap();
 /// let xpath_item_tree = XpathItemTree::from(&document);
 /// ```
+#[derive(Debug, PartialEq, Clone)]
 pub struct XpathItemTree {
     /// The index tree that stores the nodes.
-    arena: Arena<XpathItemTreeNode>,
+    pub(crate) arena: Arena<XpathItemTreeNode>,
 
     /// The root node of the document.
-    root_node: NodeId,
+    pub(crate) root_node: NodeId,
 }
 
 impl XpathItemTree {
-    fn get_index_node(&self, id: NodeId) -> &indextree::Node<XpathItemTreeNode> {
+    pub(crate) fn new(arena: Arena<XpathItemTreeNode>, root_node: NodeId) -> Self {
+        XpathItemTree { arena, root_node }
+    }
+
+    pub(crate) fn get_index_node(&self, id: NodeId) -> &indextree::Node<XpathItemTreeNode> {
         self.arena
             .get(id)
             .expect("xpath item node missing from tree")
     }
 
-    fn get(&self, id: NodeId) -> &XpathItemTreeNode {
+    pub(crate) fn get(&self, id: NodeId) -> &XpathItemTreeNode {
         let indextree_node = self.get_index_node(id);
 
         indextree_node.get()
     }
 
-    fn root(&self) -> &XpathItemTreeNode {
+    /// Get the document's root node.
+    pub fn root(&self) -> &XpathItemTreeNode {
         self.get(self.root_node)
     }
 
@@ -231,6 +277,16 @@ impl XpathItemTree {
             let id = self.arena.get_node_id(node).unwrap();
             self.get(id)
         })
+    }
+}
+
+impl Display for XpathItemTree {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            self.root().display(self, DisplayFormatting::Pretty, 0)
+        )
     }
 }
 
@@ -285,10 +341,7 @@ impl From<&HtmlDocument> for XpathItemTree {
                     item_id
                 }
                 HtmlNode::Text(text) => {
-                    let node = XpathItemTreeNode::TextNode(TextNode::new(
-                        text.value.to_string(),
-                        text.only_whitespace,
-                    ));
+                    let node = XpathItemTreeNode::TextNode(TextNode::new(text.value.to_string()));
 
                     let item_id = item_arena.new_node(node);
                     item_arena

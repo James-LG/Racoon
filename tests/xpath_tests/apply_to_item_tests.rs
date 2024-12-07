@@ -11,14 +11,13 @@ fn apply_to_item_should_select_given_node() {
         </html>"###;
 
     let document = html::parse(&text).unwrap();
-    let xpath_item_tree = xpath::XpathItemTree::from(&document);
 
     /* Stage 1: Select a node. */
     // arrange
     let xpath = xpath::parse("/html/body").unwrap();
 
     // act
-    let nodes = xpath.apply(&xpath_item_tree).unwrap();
+    let nodes = xpath.apply(&document).unwrap();
 
     // assert
     assert_eq!(nodes.len(), 1);
@@ -30,7 +29,7 @@ fn apply_to_item_should_select_given_node() {
 
     // act
     let nodes = xpath
-        .apply_to_item(&xpath_item_tree, first_expr_item.clone())
+        .apply_to_item(&document, first_expr_item.clone())
         .unwrap();
 
     // assert
@@ -60,14 +59,13 @@ fn apply_to_item_slash_should_select_children() {
         </html>"###;
 
     let document = html::parse(&text).unwrap();
-    let xpath_item_tree = xpath::XpathItemTree::from(&document);
 
     /* Stage 1: Select a node. */
     // arrange
     let xpath = xpath::parse("/html/body").unwrap();
 
     // act
-    let nodes = xpath.apply(&xpath_item_tree).unwrap();
+    let nodes = xpath.apply(&document).unwrap();
 
     // assert
     assert_eq!(nodes.len(), 1);
@@ -79,7 +77,7 @@ fn apply_to_item_slash_should_select_children() {
 
     // act
     let nodes = xpath
-        .apply_to_item(&xpath_item_tree, first_expr_item.clone())
+        .apply_to_item(&document, first_expr_item.clone())
         .unwrap();
 
     // assert
@@ -93,7 +91,7 @@ fn apply_to_item_slash_should_select_children() {
         let element = tree_node.extract_as_element_node();
         assert_eq!(element.name, "span");
 
-        assert_eq!(tree_node.text(&xpath_item_tree), Some("1".to_string()));
+        assert_eq!(tree_node.text(&document), Some("1".to_string()));
     }
 
     // assert node
@@ -103,7 +101,7 @@ fn apply_to_item_slash_should_select_children() {
         let element = tree_node.extract_as_element_node();
         assert_eq!(element.name, "span");
 
-        assert_eq!(tree_node.text(&xpath_item_tree), Some("2".to_string()));
+        assert_eq!(tree_node.text(&document), Some("2".to_string()));
     }
 
     // assert node
@@ -113,7 +111,7 @@ fn apply_to_item_slash_should_select_children() {
         let element = tree_node.extract_as_element_node();
         assert_eq!(element.name, "span");
 
-        assert_eq!(tree_node.text(&xpath_item_tree), Some("3".to_string()));
+        assert_eq!(tree_node.text(&document), Some("3".to_string()));
     }
 }
 
@@ -131,14 +129,13 @@ fn apply_to_item_double_slash_should_select_self_or_descendents() {
         </html>"###;
 
     let document = html::parse(&text).unwrap();
-    let xpath_item_tree = xpath::XpathItemTree::from(&document);
 
     /* Stage 1: Select a node. */
     // arrange
     let xpath = xpath::parse("/html").unwrap();
 
     // act
-    let nodes = xpath.apply(&xpath_item_tree).unwrap();
+    let nodes = xpath.apply(&document).unwrap();
 
     // assert
     assert_eq!(nodes.len(), 1);
@@ -150,7 +147,7 @@ fn apply_to_item_double_slash_should_select_self_or_descendents() {
 
     // act
     let nodes = xpath
-        .apply_to_item(&xpath_item_tree, first_expr_item.clone())
+        .apply_to_item(&document, first_expr_item.clone())
         .unwrap();
 
     // assert
@@ -164,7 +161,7 @@ fn apply_to_item_double_slash_should_select_self_or_descendents() {
         let element = tree_node.extract_as_element_node();
         assert_eq!(element.name, "span");
 
-        assert_eq!(tree_node.text(&xpath_item_tree), Some("1".to_string()));
+        assert_eq!(tree_node.text(&document), Some("1".to_string()));
     }
 
     // assert node
@@ -174,7 +171,7 @@ fn apply_to_item_double_slash_should_select_self_or_descendents() {
         let element = tree_node.extract_as_element_node();
         assert_eq!(element.name, "span");
 
-        assert_eq!(tree_node.text(&xpath_item_tree), Some("2".to_string()));
+        assert_eq!(tree_node.text(&document), Some("2".to_string()));
     }
 
     // assert node
@@ -184,6 +181,6 @@ fn apply_to_item_double_slash_should_select_self_or_descendents() {
         let element = tree_node.extract_as_element_node();
         assert_eq!(element.name, "span");
 
-        assert_eq!(tree_node.text(&xpath_item_tree), Some("3".to_string()));
+        assert_eq!(tree_node.text(&document), Some("3".to_string()));
     }
 }

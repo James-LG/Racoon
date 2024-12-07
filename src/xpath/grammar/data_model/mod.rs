@@ -1,15 +1,15 @@
 //! <https://www.w3.org/TR/xpath-datamodel-31/#intro>
 
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
 
 use enum_extract_macro::EnumExtract;
-use indextree::NodeId;
+use indextree::{Arena, NodeId};
 use ordered_float::OrderedFloat;
 
-use super::{TextIter, XpathItemTree, XpathItemTreeNode};
+use super::{DisplayFormatting, TextIter, XpathItemTree, XpathItemTreeNode};
 
 /// <https://www.w3.org/TR/xpath-datamodel-31/#dt-item>
-#[derive(PartialEq, PartialOrd, Eq, Ord, Debug, Clone, Hash, EnumExtract)]
+#[derive(PartialEq, Eq, Debug, Clone, Hash, EnumExtract)]
 pub enum XpathItem<'tree> {
     /// A node in the [`XpathItemTree`].
     ///
@@ -83,6 +83,10 @@ impl Display for Function {
 pub struct XpathDocumentNode {}
 
 impl XpathDocumentNode {
+    pub(crate) fn new() -> Self {
+        Self {}
+    }
+
     /// Get all text contained in this element and its descendants.
     ///
     /// # Arguments
@@ -144,17 +148,28 @@ impl XpathDocumentNode {
             .map(|x| tree.get(x))
             .collect()
     }
-}
-impl Display for XpathDocumentNode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "DocumentNode()")
+
+    pub fn display<'tree>(
+        &self,
+        tree: &'tree XpathItemTree,
+        formatting: DisplayFormatting,
+    ) -> String {
+        let children = self.children(tree);
+
+        let element_strings: Vec<String> = children
+            .iter()
+            .filter_map(|x| x.as_element_node().ok())
+            .map(|x| x.display(tree, formatting, 0))
+            .collect();
+
+        element_strings.join("\n")
     }
 }
 
 /// An element node such as an HTML tag.
 ///
 /// <https://www.w3.org/TR/xpath-datamodel-31/#ElementNode>
-#[derive(PartialEq, PartialOrd, Eq, Ord, Debug, Hash, Clone)]
+#[derive(PartialEq, Eq, Hash, Clone)]
 pub struct ElementNode {
     /// The ID of the element.
     ///
@@ -164,12 +179,28 @@ pub struct ElementNode {
 
     /// The name of the element.
     pub name: String,
+
+    /// The namespace of the element.
+    pub namespace: Option<String>,
+}
+
+impl std::fmt::Debug for ElementNode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // ignore id in debug output
+        f.debug_struct("ElementNode")
+            .field("name", &self.name)
+            .finish()
+    }
 }
 
 impl ElementNode {
     /// Create a new element node.
     pub(crate) fn new(name: String) -> Self {
-        Self { id: None, name }
+        Self {
+            id: None,
+            name,
+            namespace: None,
+        }
     }
 
     /// Set the ID of the element.
@@ -200,6 +231,18 @@ impl ElementNode {
             .collect()
     }
 
+    pub(crate) fn attributes_arena<'arena>(
+        &self,
+        arena: &'arena Arena<XpathItemTreeNode>,
+    ) -> Vec<&'arena AttributeNode> {
+        self.children_arena(arena)
+            .filter_map(|x| match x {
+                XpathItemTreeNode::AttributeNode(attr) => Some(attr),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// Get the value of an attribute.
     ///
     /// # Arguments
@@ -220,7 +263,22 @@ impl ElementNode {
             .map(|x| &*x.value)
     }
 
+    pub(crate) fn add_attribute<'arena>(
+        &self,
+        arena: &mut Arena<XpathItemTreeNode>,
+        name: String,
+        value: String,
+    ) -> NodeId {
+        let attr = arena.new_node(XpathItemTreeNode::AttributeNode(AttributeNode::new(
+            name, value,
+        )));
+        self.id().append(attr, arena);
+
+        attr
+    }
+
     /// Get all direct child nodes of the given element.
+    /// Note this _does_ include attribute nodes.
     ///
     /// # Arguments
     ///
@@ -234,6 +292,15 @@ impl ElementNode {
         tree: &'tree XpathItemTree,
     ) -> impl Iterator<Item = &'tree XpathItemTreeNode> {
         self.id().children(&tree.arena).map(|x| tree.get(x))
+    }
+
+    pub(crate) fn children_arena<'arena>(
+        &self,
+        arena: &'arena Arena<XpathItemTreeNode>,
+    ) -> impl Iterator<Item = &'arena XpathItemTreeNode> {
+        self.id()
+            .children(arena)
+            .map(|x| arena.get(x).expect("node missing from arena").get())
     }
 
     /// Get the parent of the element.
@@ -326,12 +393,65 @@ impl ElementNode {
     pub fn to_item<'tree>(&self, tree: &'tree XpathItemTree) -> XpathItem<'tree> {
         XpathItem::Node(tree.get(self.id()))
     }
+
+    pub fn display<'tree>(
+        &self,
+        tree: &'tree XpathItemTree,
+        formatting: DisplayFormatting,
+        indent: usize,
+    ) -> String {
+        let displayed_children: Vec<String> = match formatting {
+            DisplayFormatting::Pretty => {
+                let children_without_attributes =
+                    self.children(tree).filter(|x| !x.is_attribute_node());
+                children_without_attributes
+                    .map(|x| x.display(tree, formatting, indent + 1))
+                    .filter(|x| !x.trim().is_empty())
+                    .collect()
+            }
+            DisplayFormatting::NoChildren => Vec::new(),
+        };
+
+        let attributes = self.attributes(tree);
+        let displayed_attributes: Vec<String> = attributes.iter().map(|x| x.to_string()).collect();
+
+        // indent the element
+        let indentation = "  ".repeat(indent);
+
+        let mut display_string = String::new();
+
+        // display the start tag
+        if displayed_attributes.is_empty() {
+            display_string.push_str(&format!("{}<{}>", indentation, self.name,));
+        } else {
+            display_string.push_str(&format!(
+                "{}<{} {}>",
+                indentation,
+                self.name,
+                displayed_attributes.join(" "),
+            ));
+        }
+
+        // display the children
+        if !displayed_children.is_empty() {
+            display_string.push_str(&format!(
+                "\n{}\n{}",
+                &displayed_children.join("\n"),
+                indentation
+            ));
+        }
+
+        // display the end tag
+        display_string.push_str(&format!("</{}>", self.name));
+
+        return display_string;
+    }
 }
 
 /// An attribute node.
 ///
 /// <https://www.w3.org/TR/xpath-datamodel-31/#AttributeNode>
-#[derive(PartialEq, PartialOrd, Eq, Ord, Debug, Clone, Hash)]
+#[derive(Eq, Clone, Hash)]
 pub struct AttributeNode {
     /// The ID of the attribute.
     ///
@@ -344,6 +464,16 @@ pub struct AttributeNode {
 
     /// The value of the attribute.
     pub value: String,
+}
+
+impl Debug for AttributeNode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // ignore id in debug output
+        f.debug_struct("AttributeNode")
+            .field("name", &self.name)
+            .field("value", &self.value)
+            .finish()
+    }
 }
 
 impl AttributeNode {
@@ -365,11 +495,30 @@ impl AttributeNode {
     pub(crate) fn id(&self) -> NodeId {
         self.id.unwrap()
     }
+
+    /// Get the parent of the attribute.
+    ///
+    /// # Arguments
+    ///
+    /// * `tree` - The tree containing the attribute.
+    ///
+    /// # Returns
+    ///
+    /// The parent of the attribute if it exists, or `None` if it does not.
+    pub fn parent<'tree>(&self, tree: &'tree XpathItemTree) -> Option<&'tree XpathItemTreeNode> {
+        tree.get(self.id()).parent(tree)
+    }
 }
 
 impl Display for AttributeNode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}=\"{}\"", self.name, self.value)
+    }
+}
+
+impl PartialEq for AttributeNode {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name && self.value == other.value
     }
 }
 
@@ -386,10 +535,57 @@ impl Display for PINode {
 }
 
 /// <https://www.w3.org/TR/xpath-datamodel-31/#CommentNode>
-#[derive(PartialEq, PartialOrd, Eq, Ord, Debug, Hash, Clone)]
+#[derive(PartialOrd, Eq, Ord, Debug, Hash, Clone)]
 pub struct CommentNode {
     /// The value of the comment.
     pub content: String,
+
+    /// The ID of the comment node.
+    id: Option<NodeId>,
+}
+
+impl CommentNode {
+    /// Create a new comment node.
+    pub(crate) fn new(content: String) -> Self {
+        Self { content, id: None }
+    }
+
+    pub(crate) fn create(content: String, arena: &mut Arena<XpathItemTreeNode>) -> NodeId {
+        let node_id = arena.new_node(XpathItemTreeNode::CommentNode(CommentNode::new(content)));
+
+        arena
+            .get_mut(node_id)
+            .unwrap()
+            .get_mut()
+            .as_comment_node_mut()
+            .unwrap()
+            .set_id(node_id);
+
+        node_id
+    }
+
+    /// Set the ID of the comment node.
+    pub(crate) fn set_id(&mut self, id: NodeId) {
+        self.id = Some(id);
+    }
+
+    /// Get the ID of the comment node.
+    pub(crate) fn id(&self) -> NodeId {
+        self.id.unwrap()
+    }
+
+    /// Get the parent of the comment.
+    ///
+    /// # Arguments
+    ///
+    /// * `tree` - The tree containing the comment.
+    ///
+    /// # Returns
+    ///
+    /// The parent of the comment if it exists, or `None` if it does not.
+    pub fn parent<'tree>(&self, tree: &'tree XpathItemTree) -> Option<&'tree XpathItemTreeNode> {
+        tree.get(self.id()).parent(tree)
+    }
 }
 
 impl Display for CommentNode {
@@ -398,8 +594,14 @@ impl Display for CommentNode {
     }
 }
 
+impl PartialEq for CommentNode {
+    fn eq(&self, other: &Self) -> bool {
+        self.content == other.content
+    }
+}
+
 /// <https://www.w3.org/TR/xpath-datamodel-31/#TextNode>
-#[derive(PartialEq, PartialOrd, Eq, Ord, Debug, Hash, Clone)]
+#[derive(Eq, Hash, Clone)]
 pub struct TextNode {
     /// The ID of the text node.
     ///
@@ -409,19 +611,21 @@ pub struct TextNode {
 
     /// The value of the text node.
     pub content: String,
+}
 
-    /// Whether the text node contains only whitespace.
-    pub only_whitespace: bool,
+impl Debug for TextNode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // ignore id in debug output
+        f.debug_struct("TextNode")
+            .field("content", &self.content)
+            .finish()
+    }
 }
 
 impl TextNode {
     /// Create a new text node.
-    pub(crate) fn new(content: String, only_whitespace: bool) -> Self {
-        Self {
-            id: None,
-            content,
-            only_whitespace,
-        }
+    pub(crate) fn new(content: String) -> Self {
+        Self { id: None, content }
     }
 
     /// Set the ID of the text node.
@@ -433,10 +637,49 @@ impl TextNode {
     pub(crate) fn id(&self) -> NodeId {
         self.id.unwrap()
     }
+
+    /// Whether the text contains only whitespace.
+    pub fn is_whitespace(&self) -> bool {
+        self.content.trim().is_empty()
+    }
+
+    /// Get the parent of the text.
+    ///
+    /// # Arguments
+    ///
+    /// * `tree` - The tree containing the text.
+    ///
+    /// # Returns
+    ///
+    /// The parent of the text if it exists, or `None` if it does not.
+    pub fn parent<'tree>(&self, tree: &'tree XpathItemTree) -> Option<&'tree XpathItemTreeNode> {
+        tree.get(self.id()).parent(tree)
+    }
+
+    pub fn display(
+        &self,
+        _tree: &XpathItemTree,
+        formatting: DisplayFormatting,
+        indent: usize,
+    ) -> String {
+        let indentation = "  ".repeat(indent);
+        let string = match formatting {
+            DisplayFormatting::NoChildren => self.content.clone(),
+            DisplayFormatting::Pretty => self.content.clone().trim().to_string(),
+        };
+
+        format!("{}{}", indentation, string)
+    }
+}
+
+impl PartialEq for TextNode {
+    fn eq(&self, other: &Self) -> bool {
+        self.content == other.content
+    }
 }
 
 impl Display for TextNode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "\"{}\"", self.content)
+        write!(f, "{}", self.content)
     }
 }

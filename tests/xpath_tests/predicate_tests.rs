@@ -17,11 +17,10 @@ fn class_equals_predicate_should_select_nodes_with_that_match() {
         </html>"###;
 
     let document = html::parse(&text).unwrap();
-    let xpath_item_tree = xpath::XpathItemTree::from(&document);
     let xpath = xpath::parse("/html/div[@class='here']").unwrap();
 
     // act
-    let nodes = xpath.apply(&xpath_item_tree).unwrap();
+    let nodes = xpath.apply(&document).unwrap();
 
     // assert
     assert_eq!(nodes.len(), 1);
@@ -35,7 +34,7 @@ fn class_equals_predicate_should_select_nodes_with_that_match() {
         assert_eq!(element.name, "div");
 
         assert_eq!(
-            trim_internal_whitespace(&tree_node.text(&xpath_item_tree).unwrap()),
+            trim_internal_whitespace(&tree_node.text(&document).unwrap()),
             "good"
         );
     }
@@ -55,11 +54,10 @@ fn predicate_on_double_leading_slash_should_select_nodes_with_that_match() {
         </html>"###;
 
     let document = html::parse(&text).unwrap();
-    let xpath_item_tree = xpath::XpathItemTree::from(&document);
     let xpath = xpath::parse("//div[@class='here']").unwrap();
 
     // act
-    let nodes = xpath.apply(&xpath_item_tree).unwrap();
+    let nodes = xpath.apply(&document).unwrap();
 
     // assert
     assert_eq!(nodes.len(), 1);
@@ -73,7 +71,7 @@ fn predicate_on_double_leading_slash_should_select_nodes_with_that_match() {
         assert_eq!(element.name, "div");
 
         assert_eq!(
-            trim_internal_whitespace(&tree_node.text(&xpath_item_tree).unwrap()),
+            trim_internal_whitespace(&tree_node.text(&document).unwrap()),
             "good"
         );
     }
@@ -97,11 +95,10 @@ fn index_should_select_indexed_child_for_all_selected_parents() {
         </html>"###;
 
     let document = html::parse(&text).unwrap();
-    let xpath_item_tree = xpath::XpathItemTree::from(&document);
     let xpath = xpath::parse("//div/p[2]").unwrap();
 
     // act
-    let nodes = xpath.apply(&xpath_item_tree).unwrap();
+    let nodes = xpath.apply(&document).unwrap();
 
     // assert
     assert_eq!(nodes.len(), 2);
@@ -115,7 +112,7 @@ fn index_should_select_indexed_child_for_all_selected_parents() {
         assert_eq!(element.name, "p");
 
         assert_eq!(
-            trim_internal_whitespace(&tree_node.text(&xpath_item_tree).unwrap()),
+            trim_internal_whitespace(&tree_node.text(&document).unwrap()),
             "2"
         );
     }
@@ -128,7 +125,7 @@ fn index_should_select_indexed_child_for_all_selected_parents() {
         assert_eq!(element.name, "p");
 
         assert_eq!(
-            trim_internal_whitespace(&tree_node.text(&xpath_item_tree).unwrap()),
+            trim_internal_whitespace(&tree_node.text(&document).unwrap()),
             "5"
         );
     }
@@ -152,11 +149,10 @@ fn index_out_of_bounds_should_select_nothing_for_parent() {
         </html>"###;
 
     let document = html::parse(&text).unwrap();
-    let xpath_item_tree = xpath::XpathItemTree::from(&document);
     let xpath = xpath::parse("//div/p[2]").unwrap();
 
     // act
-    let nodes = xpath.apply(&xpath_item_tree).unwrap();
+    let nodes = xpath.apply(&document).unwrap();
 
     // assert
     assert_eq!(nodes.len(), 2);
@@ -170,7 +166,7 @@ fn index_out_of_bounds_should_select_nothing_for_parent() {
         assert_eq!(element.name, "p");
 
         assert_eq!(
-            trim_internal_whitespace(&tree_node.text(&xpath_item_tree).unwrap()),
+            trim_internal_whitespace(&tree_node.text(&document).unwrap()),
             "2"
         );
     }

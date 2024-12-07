@@ -13,11 +13,10 @@ fn leading_slash_should_select_html_node() {
         </html>"###;
 
     let document = html::parse(&text).unwrap();
-    let xpath_item_tree = xpath::XpathItemTree::from(&document);
     let xpath = xpath::parse("/html").unwrap();
 
     // act
-    let nodes = xpath.apply(&xpath_item_tree).unwrap();
+    let nodes = xpath.apply(&document).unwrap();
 
     // assert
     assert_eq!(nodes.len(), 1);
@@ -52,11 +51,10 @@ fn leading_double_slash_should_select_all() {
         </html>"###;
 
     let document = html::parse(&text).unwrap();
-    let xpath_item_tree = xpath::XpathItemTree::from(&document);
     let xpath = xpath::parse("//p").unwrap();
 
     // act
-    let nodes = xpath.apply(&xpath_item_tree).unwrap();
+    let nodes = xpath.apply(&document).unwrap();
 
     // assert
     assert_eq!(nodes.len(), 6);
@@ -69,7 +67,7 @@ fn leading_double_slash_should_select_all() {
         let element = tree_node.extract_as_element_node();
         assert_eq!(element.name, "p");
 
-        assert_eq!(tree_node.text(&xpath_item_tree), Some("1".to_string()));
+        assert_eq!(tree_node.text(&document), Some("1".to_string()));
     }
 
     // assert node
@@ -79,7 +77,7 @@ fn leading_double_slash_should_select_all() {
         let element = tree_node.extract_as_element_node();
         assert_eq!(element.name, "p");
 
-        assert_eq!(tree_node.text(&xpath_item_tree), Some("2".to_string()));
+        assert_eq!(tree_node.text(&document), Some("2".to_string()));
     }
 
     // assert node
@@ -89,7 +87,7 @@ fn leading_double_slash_should_select_all() {
         let element = tree_node.extract_as_element_node();
         assert_eq!(element.name, "p");
 
-        assert_eq!(tree_node.text(&xpath_item_tree), Some("3".to_string()));
+        assert_eq!(tree_node.text(&document), Some("3".to_string()));
     }
 
     // assert node
@@ -99,7 +97,7 @@ fn leading_double_slash_should_select_all() {
         let element = tree_node.extract_as_element_node();
         assert_eq!(element.name, "p");
 
-        assert_eq!(tree_node.text(&xpath_item_tree), Some("4".to_string()));
+        assert_eq!(tree_node.text(&document), Some("4".to_string()));
     }
 
     // assert node
@@ -109,7 +107,7 @@ fn leading_double_slash_should_select_all() {
         let element = tree_node.extract_as_element_node();
         assert_eq!(element.name, "p");
 
-        assert_eq!(tree_node.text(&xpath_item_tree), Some("5".to_string()));
+        assert_eq!(tree_node.text(&document), Some("5".to_string()));
     }
 
     // assert node
@@ -119,7 +117,7 @@ fn leading_double_slash_should_select_all() {
         let element = tree_node.extract_as_element_node();
         assert_eq!(element.name, "p");
 
-        assert_eq!(tree_node.text(&xpath_item_tree), Some("6".to_string()));
+        assert_eq!(tree_node.text(&document), Some("6".to_string()));
     }
 }
 
@@ -147,11 +145,10 @@ fn double_slash_should_select_all() {
         </html>"###;
 
     let document = html::parse(&text).unwrap();
-    let xpath_item_tree = xpath::XpathItemTree::from(&document);
     let xpath = xpath::parse("/html/footer/div//p").unwrap();
 
     // act
-    let nodes = xpath.apply(&xpath_item_tree).unwrap();
+    let nodes = xpath.apply(&document).unwrap();
 
     // assert
     assert_eq!(nodes.len(), 3);
@@ -164,7 +161,7 @@ fn double_slash_should_select_all() {
         let element = tree_node.extract_as_element_node();
         assert_eq!(element.name, "p");
 
-        assert_eq!(tree_node.text(&xpath_item_tree), Some("4".to_string()));
+        assert_eq!(tree_node.text(&document), Some("4".to_string()));
     }
 
     // assert node
@@ -174,7 +171,7 @@ fn double_slash_should_select_all() {
         let element = tree_node.extract_as_element_node();
         assert_eq!(element.name, "p");
 
-        assert_eq!(tree_node.text(&xpath_item_tree), Some("5".to_string()));
+        assert_eq!(tree_node.text(&document), Some("5".to_string()));
     }
 
     // assert node
@@ -184,7 +181,7 @@ fn double_slash_should_select_all() {
         let element = tree_node.extract_as_element_node();
         assert_eq!(element.name, "p");
 
-        assert_eq!(tree_node.text(&xpath_item_tree), Some("6".to_string()));
+        assert_eq!(tree_node.text(&document), Some("6".to_string()));
     }
 }
 
@@ -203,11 +200,10 @@ fn document_order_preserved_in_results() {
         </html>"###;
 
     let document = html::parse(&text).unwrap();
-    let xpath_item_tree = xpath::XpathItemTree::from(&document);
     let xpath = xpath::parse("/html/body//span").unwrap();
 
     // act
-    let nodes = xpath.apply(&xpath_item_tree).unwrap();
+    let nodes = xpath.apply(&document).unwrap();
 
     // assert
     assert_eq!(nodes.len(), 3);
@@ -221,7 +217,7 @@ fn document_order_preserved_in_results() {
 
         assert_eq!(element_node.name, "span");
 
-        assert_eq!(tree_node.text(&xpath_item_tree), Some("1".to_string()));
+        assert_eq!(tree_node.text(&document), Some("1".to_string()));
     }
 
     // assert node
@@ -233,7 +229,7 @@ fn document_order_preserved_in_results() {
         assert_eq!(element_node.name, "span");
 
         assert_eq!(
-            trim_internal_whitespace(&tree_node.text(&xpath_item_tree).unwrap()),
+            trim_internal_whitespace(&tree_node.text(&document).unwrap()),
             "2"
         );
     }
@@ -247,7 +243,7 @@ fn document_order_preserved_in_results() {
         assert_eq!(element_node.name, "span");
 
         assert_eq!(
-            trim_internal_whitespace(&tree_node.text(&xpath_item_tree).unwrap()),
+            trim_internal_whitespace(&tree_node.text(&document).unwrap()),
             "3"
         );
     }

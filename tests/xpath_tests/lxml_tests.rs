@@ -5,6 +5,7 @@ use std::{
     process::{Command, Stdio},
 };
 
+use itertools::Itertools;
 use serde::Deserialize;
 use skyscraper::{
     html::{self, HtmlNode},
@@ -101,36 +102,59 @@ fn compare_skyscraper_to_lxml(
     lxml_elements: Vec<LxmlElement>,
     converted_skyscraper_elems: Vec<LxmlElement>,
 ) {
-    for (i, (lxml_elem, skyscraper_elem)) in lxml_elements
+    for (i, eb) in lxml_elements
         .iter()
-        .zip(converted_skyscraper_elems.iter())
+        .zip_longest(converted_skyscraper_elems.iter())
         .enumerate()
     {
-        assert_eq!(
-            lxml_elem.tag, skyscraper_elem.tag,
-            "Tag mismatch at index {}",
-            i
-        );
-        assert_eq!(
-            lxml_elem.text, skyscraper_elem.text,
-            "Text mismatch at index {}",
-            i
-        );
-        assert_eq!(
-            lxml_elem.attrib, skyscraper_elem.attrib,
-            "Attribute mismatch at index {}",
-            i
-        );
-        assert_eq!(
-            lxml_elem.itertext, skyscraper_elem.itertext,
-            "Itertext mismatch at index {}",
-            i
-        );
+        let (lxml_elem, skyscraper_elem) = eb.left_and_right();
+
+        if let (Some(lxml_elem), Some(skyscraper_elem)) = (lxml_elem, skyscraper_elem) {
+            assert_eq!(
+                lxml_elem.tag, skyscraper_elem.tag,
+                "Tag mismatch at index {}",
+                i
+            );
+            assert_eq!(
+                lxml_elem.text, skyscraper_elem.text,
+                "Text mismatch at index {}",
+                i
+            );
+            assert_eq!(
+                lxml_elem.attrib, skyscraper_elem.attrib,
+                "Attribute mismatch at index {}",
+                i
+            );
+            compare_itertext(&lxml_elem.itertext, &skyscraper_elem.itertext);
+        } else {
+            assert_eq!(
+                lxml_elem, skyscraper_elem,
+                "Element mismatch at index {}",
+                i
+            );
+        }
     }
     assert_eq!(converted_skyscraper_elems.len(), lxml_elements.len());
 }
 
-static GITHUB_HTML: &'static str = include_str!("samples/James-LG_Skyscraper.html");
+fn compare_itertext(first: &Vec<String>, second: &Vec<String>) {
+    println!("First itertext:");
+    for (i, x) in first.iter().enumerate() {
+        println!("{}: {:?}", i, x);
+    }
+
+    println!("Second itertext:");
+    for (i, x) in second.iter().enumerate() {
+        println!("{}: {:?}", i, x);
+    }
+
+    for (i, eb) in first.iter().zip_longest(second.iter()).enumerate() {
+        let (first, second) = eb.left_and_right();
+        assert_eq!(first, second, "Itertext mismatch at index {}", i);
+    }
+}
+
+static GITHUB_HTML: &'static str = include_str!("../samples/James-LG_Skyscraper.html");
 
 /// This test is a sanity check of the lxml output.
 #[test]
@@ -160,16 +184,15 @@ fn test_text_handling() {
     let xpath = r#"//div[@role='tabpanel']"#;
 
     let html_document = html::parse(&html_text).unwrap();
-    let xpath_item_tree = XpathItemTree::from(&html_document);
     let xpath_expr = xpath::parse(xpath).unwrap();
 
     // act
     let lxml_elements = get_lxml_elements(xpath, html_text);
-    let skyscraper_elements = xpath_expr.apply(&xpath_item_tree).unwrap();
+    let skyscraper_elements = xpath_expr.apply(&html_document).unwrap();
 
     // assert
     let converted_skyscraper_elems =
-        skyscraper_to_lxml_elements(&xpath_item_tree, skyscraper_elements);
+        skyscraper_to_lxml_elements(&html_document, skyscraper_elements);
 
     compare_skyscraper_to_lxml(lxml_elements, converted_skyscraper_elems);
 }
@@ -181,16 +204,15 @@ fn test_text_handling2() {
     let xpath = r#"//h2"#;
 
     let html_document = html::parse(&html_text).unwrap();
-    let xpath_item_tree = XpathItemTree::from(&html_document);
     let xpath_expr = xpath::parse(xpath).unwrap();
 
     // act
     let lxml_elements = get_lxml_elements(xpath, html_text);
-    let skyscraper_elements = xpath_expr.apply(&xpath_item_tree).unwrap();
+    let skyscraper_elements = xpath_expr.apply(&html_document).unwrap();
 
     // assert
     let converted_skyscraper_elems =
-        skyscraper_to_lxml_elements(&xpath_item_tree, skyscraper_elements);
+        skyscraper_to_lxml_elements(&html_document, skyscraper_elements);
 
     compare_skyscraper_to_lxml(lxml_elements, converted_skyscraper_elems);
 }
@@ -202,16 +224,15 @@ fn test_text_handling3() {
     let xpath = r#"//div"#;
 
     let html_document = html::parse(&html_text).unwrap();
-    let xpath_item_tree = XpathItemTree::from(&html_document);
     let xpath_expr = xpath::parse(xpath).unwrap();
 
     // act
     let lxml_elements = get_lxml_elements(xpath, html_text);
-    let skyscraper_elements = xpath_expr.apply(&xpath_item_tree).unwrap();
+    let skyscraper_elements = xpath_expr.apply(&html_document).unwrap();
 
     // assert
     let converted_skyscraper_elems =
-        skyscraper_to_lxml_elements(&xpath_item_tree, skyscraper_elements);
+        skyscraper_to_lxml_elements(&html_document, skyscraper_elements);
 
     compare_skyscraper_to_lxml(lxml_elements, converted_skyscraper_elems);
 }
@@ -223,12 +244,11 @@ fn test_item_count1() {
     let xpath = "//div[@class='flex-auto min-width-0 width-fit mr-3']";
 
     let html_document = html::parse(&html_text).unwrap();
-    let xpath_item_tree = XpathItemTree::from(&html_document);
     let xpath_expr = xpath::parse(xpath).unwrap();
 
     // act
     let lxml_output = get_lxml_output(xpath, html_text, true);
-    let skyscraper_elements = xpath_expr.apply(&xpath_item_tree).unwrap();
+    let skyscraper_elements = xpath_expr.apply(&html_document).unwrap();
 
     // assert
     let output = String::from_utf8_lossy(&lxml_output.stdout);

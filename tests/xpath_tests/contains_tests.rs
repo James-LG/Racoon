@@ -17,11 +17,10 @@ fn contains_should_select_text() {
         </html>"###;
 
     let document = html::parse(&text).unwrap();
-    let xpath_item_tree = xpath::XpathItemTree::from(&document);
     let xpath = xpath::parse("//div[contains(text(),'select')]").unwrap();
 
     // act
-    let nodes = xpath.apply(&xpath_item_tree).unwrap();
+    let nodes = xpath.apply(&document).unwrap();
 
     // assert
     assert_eq!(nodes.len(), 1);
@@ -35,7 +34,7 @@ fn contains_should_select_text() {
         assert_eq!(element.name, "div");
 
         assert_eq!(
-            trim_internal_whitespace(&tree_node.text(&xpath_item_tree).unwrap()),
+            trim_internal_whitespace(&tree_node.text(&document).unwrap()),
             "select me"
         );
     }
@@ -55,11 +54,10 @@ fn contains_should_select_attribute() {
         </html>"###;
 
     let document = html::parse(&text).unwrap();
-    let xpath_item_tree = xpath::XpathItemTree::from(&document);
     let xpath = xpath::parse("//div[contains(@class,'select')]").unwrap();
 
     // act
-    let nodes = xpath.apply(&xpath_item_tree).unwrap();
+    let nodes = xpath.apply(&document).unwrap();
 
     // assert
     assert_eq!(nodes.len(), 1);
@@ -73,7 +71,7 @@ fn contains_should_select_attribute() {
         assert_eq!(element.name, "div");
 
         assert_eq!(
-            trim_internal_whitespace(&tree_node.text(&xpath_item_tree).unwrap()),
+            trim_internal_whitespace(&tree_node.text(&document).unwrap()),
             "select me"
         );
     }
@@ -95,14 +93,13 @@ fn contains_should_select_on_expression() {
         </html>"###;
 
     let document = html::parse(&text).unwrap();
-    let xpath_item_tree = xpath::XpathItemTree::from(&document);
 
     // this expression first selects the class attribute of the div with id 'select',
     // then uses that result to find a div with text containing that class.
     let xpath = xpath::parse("//div[contains(text(),//div[@id='select']/@class)]").unwrap();
 
     // act
-    let nodes = xpath.apply(&xpath_item_tree).unwrap();
+    let nodes = xpath.apply(&document).unwrap();
 
     // assert
     assert_eq!(nodes.len(), 1);
@@ -116,7 +113,7 @@ fn contains_should_select_on_expression() {
         assert_eq!(element.name, "div");
 
         assert_eq!(
-            trim_internal_whitespace(&tree_node.text(&xpath_item_tree).unwrap()),
+            trim_internal_whitespace(&tree_node.text(&document).unwrap()),
             "hello world"
         );
     }

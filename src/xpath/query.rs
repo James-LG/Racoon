@@ -210,7 +210,7 @@ mod tests {
     fn find_attributes_should_find_attribute() {
         // arrange
         let html = r#"<html><body><div id="example">Example 1</div></body></html>"#;
-        let tree = XpathItemTree::from(&html::parse(html).unwrap());
+        let tree = html::parse(html).unwrap();
 
         // act
         let attributes = find_attributes(&tree, "//div/@id").unwrap();
@@ -226,7 +226,7 @@ mod tests {
     fn find_elements_should_find_element() {
         // arrange
         let html = r#"<html><body><div id="example">Example 1</div></body></html>"#;
-        let tree = XpathItemTree::from(&html::parse(html).unwrap());
+        let tree = html::parse(html).unwrap();
 
         // act
         let elements = find_elements(&tree, "//div").unwrap();
@@ -241,7 +241,7 @@ mod tests {
     fn find_elements_from_item_should_find_element() {
         // arrange
         let html = r#"<html><body><div id="example">Example 1</div></body></html>"#;
-        let tree = XpathItemTree::from(&html::parse(html).unwrap());
+        let tree = html::parse(html).unwrap();
 
         let items = find(&tree, "//body").unwrap();
 
@@ -262,7 +262,7 @@ mod tests {
     fn find_elements_from_element_should_find_element() {
         // arrange
         let html = r#"<html><body><div id="example">Example 1</div></body></html>"#;
-        let tree = XpathItemTree::from(&html::parse(html).unwrap());
+        let tree = html::parse(html).unwrap();
 
         let first_elements = find_elements(&tree, "//body").unwrap();
 

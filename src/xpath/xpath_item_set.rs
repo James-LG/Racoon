@@ -18,11 +18,11 @@ impl PartialEq for XpathItemSet<'_> {
     }
 }
 
-impl PartialOrd for XpathItemSet<'_> {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.index_set.iter().partial_cmp(&other.index_set)
-    }
-}
+// impl PartialOrd for XpathItemSet<'_> {
+//     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+//         self.index_set.iter().partial_cmp(&other.index_set)
+//     }
+// }
 
 impl<'a, 'tree> IntoIterator for &'a XpathItemSet<'tree> {
     type Item = &'a XpathItem<'tree>;
@@ -119,9 +119,9 @@ impl<'tree> XpathItemSet<'tree> {
         }
     }
 
-    pub(crate) fn sort(&mut self) {
-        self.index_set.sort();
-    }
+    // pub(crate) fn sort(&mut self) {
+    //     self.index_set.sort();
+    // }
 }
 
 impl<'tree> From<IndexSet<XpathItem<'tree>>> for XpathItemSet<'tree> {

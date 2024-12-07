@@ -10,11 +10,10 @@ fn parent_axis_should_select_parent_node() {
         </html>"###;
 
     let document = html::parse(&text).unwrap();
-    let xpath_item_tree = xpath::XpathItemTree::from(&document);
     let xpath = xpath::parse("//body/parent::html").unwrap();
 
     // act
-    let nodes = xpath.apply(&xpath_item_tree).unwrap();
+    let nodes = xpath.apply(&document).unwrap();
 
     // assert
     assert_eq!(nodes.len(), 1);
@@ -50,11 +49,10 @@ fn parent_axis_should_select_parents_of_all_selected_nodes() {
         </html>"###;
 
     let document = html::parse(&text).unwrap();
-    let xpath_item_tree = xpath::XpathItemTree::from(&document);
     let xpath = xpath::parse("//p/parent::div").unwrap();
 
     // act
-    let nodes = xpath.apply(&xpath_item_tree).unwrap();
+    let nodes = xpath.apply(&document).unwrap();
 
     // assert
     assert_eq!(nodes.len(), 2);
@@ -66,7 +64,7 @@ fn parent_axis_should_select_parents_of_all_selected_nodes() {
 
         let element = tree_node.extract_as_element_node();
         assert_eq!(element.name, "div");
-        assert_eq!(element.get_attribute(&xpath_item_tree, "id"), Some("1"));
+        assert_eq!(element.get_attribute(&document, "id"), Some("1"));
     }
 
     // assert node
@@ -75,7 +73,7 @@ fn parent_axis_should_select_parents_of_all_selected_nodes() {
 
         let element = tree_node.extract_as_element_node();
         assert_eq!(element.name, "div");
-        assert_eq!(element.get_attribute(&xpath_item_tree, "id"), Some("2"));
+        assert_eq!(element.get_attribute(&document, "id"), Some("2"));
     }
 }
 
@@ -101,11 +99,10 @@ fn parent_axis_should_respect_node_test() {
         </html>"###;
 
     let document = html::parse(&text).unwrap();
-    let xpath_item_tree = xpath::XpathItemTree::from(&document);
     let xpath = xpath::parse("//p/parent::div").unwrap();
 
     // act
-    let nodes = xpath.apply(&xpath_item_tree).unwrap();
+    let nodes = xpath.apply(&document).unwrap();
 
     // assert
     assert_eq!(nodes.len(), 2);
@@ -117,7 +114,7 @@ fn parent_axis_should_respect_node_test() {
 
         let element = tree_node.extract_as_element_node();
         assert_eq!(element.name, "div");
-        assert_eq!(element.get_attribute(&xpath_item_tree, "id"), Some("1"));
+        assert_eq!(element.get_attribute(&document, "id"), Some("1"));
     }
 
     // assert node
@@ -126,6 +123,6 @@ fn parent_axis_should_respect_node_test() {
 
         let element = tree_node.extract_as_element_node();
         assert_eq!(element.name, "div");
-        assert_eq!(element.get_attribute(&xpath_item_tree, "id"), Some("2"));
+        assert_eq!(element.get_attribute(&document, "id"), Some("2"));
     }
 }

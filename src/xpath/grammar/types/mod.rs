@@ -160,7 +160,7 @@ impl KindTest {
                 // Select all text nodes.
                 let filtered_nodes = item_set.iter().filter_map(|item| {
                     if let XpathItem::Node(node) = item {
-                        if matches!(node, XpathItemTreeNode::TextNode(_),) {
+                        if node.is_text_node() {
                             return Some(*node);
                         }
                     }

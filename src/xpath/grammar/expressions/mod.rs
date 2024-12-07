@@ -121,7 +121,7 @@ impl Xpath {
         let context =
             XpathExpressionContext::new_single(item_tree, XpathItem::Node(item_tree.root()), true);
         let mut item_set = self.eval(&context)?;
-        item_set.sort();
+        // TODO: Why was this sorted? item_set.sort();
         Ok(item_set)
     }
 

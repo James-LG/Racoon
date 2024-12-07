@@ -221,6 +221,7 @@ impl ExpressionApplyError {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct XpathExpressionContext<'tree> {
     item_tree: &'tree XpathItemTree,
     item: XpathItem<'tree>,
@@ -234,7 +235,7 @@ pub(crate) struct XpathExpressionContext<'tree> {
     /// `false` if this expression is being applied to a specific item in the tree.
     ///
     /// This should not be modified for the entire evaluation cycle of an expression.
-    is_root_level: bool,
+    is_root_level: bool, // TODO: This should be `is_initial_step`; it's not used for the root level
 }
 
 impl<'tree> XpathExpressionContext<'tree> {
